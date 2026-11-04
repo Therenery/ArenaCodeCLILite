@@ -1,9 +1,10 @@
 //! Windows 终端：全部走 Win32 控制台 API，不依赖任何外部命令。
 //!
 //! - 输出：开 ENABLE_VIRTUAL_TERMINAL_PROCESSING，ANSI 序列直接可用
-//! - 输入：关 ENABLE_LINE_INPUT / ENABLE_ECHO_INPUT / ENABLE_PROCESSED_INPUT，
-//!   开 ENABLE_VIRTUAL_TERMINAL_INPUT；按键用 ReadConsoleInputW 拿真实键记录，
-//!   这样 Shift+Enter 也能和 Enter 区分开
+//! - 输入：关 ENABLE_LINE_INPUT / ENABLE_ECHO_INPUT / ENABLE_PROCESSED_INPUT；
+//!   不开 ENABLE_VIRTUAL_TERMINAL_INPUT，否则 ReadConsoleInputW 拿到的
+//!   wVirtualKeyCode 会变成 0，Enter / Backspace 都会退化。按键用
+//!   ReadConsoleInputW 拿真实键记录，这样 Shift+Enter 也能和 Enter 区分开
 //! - 尺寸：GetConsoleScreenBufferInfo 取可见窗口的行列
 
 use std::os::raw::c_void;
@@ -23,7 +24,6 @@ const ENABLE_LINE_INPUT: u32 = 0x0002;
 const ENABLE_ECHO_INPUT: u32 = 0x0004;
 const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
 const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
-const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
 const ENABLE_PROCESSED_OUTPUT: u32 = 0x0001;
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
@@ -178,7 +178,7 @@ pub fn enter_raw() -> Option<RawMode> {
         if GetConsoleMode(hout, &mut out_mode) == 0 {
             return None;
         }
-        let want_in = (in_mode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS)
+        let want_in = (in_mode | ENABLE_EXTENDED_FLAGS)
             & !(ENABLE_LINE_INPUT
                 | ENABLE_ECHO_INPUT
                 | ENABLE_PROCESSED_INPUT
@@ -282,16 +282,19 @@ fn decode_key(body: &[u8; 16]) -> Vec<Key> {
         0x2D => Key::Ignored, // Insert
         0x2E => Key::Delete,
         v @ 0x41..=0x5A if ctrl => Key::Ctrl((b'a' + (v - 0x41) as u8) as char),
-        _ => {
-            if ch == 0 {
-                Key::Ignored
-            } else {
-                match char::from_u32(ch as u32) {
-                    Some(c) if (c as u32) >= 0x20 => Key::Char(c),
-                    _ => Key::Ignored,
-                }
-            }
-        }
+        _ => match ch {
+            // 有些终端（ConPTY / SSH 伪终端）只给 UnicodeChar，不给 VirtualKeyCode
+            0x0D => Key::Enter,
+            0x0A => Key::Newline,
+            0x09 => Key::Tab,
+            0x08 | 0x7F => Key::Backspace,
+            0x1B => Key::Esc,
+            0 => Key::Ignored,
+            _ => match char::from_u32(ch as u32) {
+                Some(c) if (c as u32) >= 0x20 => Key::Char(c),
+                _ => Key::Ignored,
+            },
+        },
     };
     vec![key; repeat]
 }

@@ -91,7 +91,7 @@ arena-lite --version
 | `--base <地址>` | 桥地址，默认 `127.0.0.1:17892`；也接受 `http://127.0.0.1:17892` |
 | `--token <值>` | 桥设了 `ARB_TOKEN` 时必填 |
 | `-r, --reasoning` | 思考链默认展开 |
-| `--no-logo` | 跳过启动 LOGO |
+| `--no-logo` | 不显示顶部常驻 LOGO 头 |
 | `--no-color` | 关颜色 |
 | `-V/--version`、`-h/--help` | 版本 / 帮助 |
 
@@ -106,13 +106,27 @@ arena-lite --version
 | `ARENA_SESSION` | 默认会话名 |
 | `ARENA_MODE` | 默认模式 |
 | `ARENA_REASONING=1` | 思考链默认展开（等价 `--reasoning`） |
-| `ARENA_NO_LOGO=1` | 跳过 LOGO |
+| `ARENA_NO_LOGO=1` | 不显示顶部常驻 LOGO 头（等价 `--no-logo`） |
 | `NO_COLOR=1` / `ARENA_NO_COLOR=1` | 关颜色 |
 | `COLUMNS` / `LINES` | 拿不到终端尺寸时的兜底（Unix） |
 
 ---
 
-## 3. 键位
+## 3. 界面与键位
+
+顶部常驻一块 ASCII LOGO 头，左边是 `ARENA` 的 ANSI Shadow 字，右边一列五行动态信息：
+
+```
+arena-lite 2.0
+模式  agent
+会话  main
+模型  arena-agent
+桥    127.0.0.1:17892 ●
+```
+
+第六行在空闲时显示 `Ctrl+N 会话 · /help`，流式中换成 spinner 和已耗时秒数。
+终端小于 22 行或 62 列时自动收起，退回原来两行状态栏，不会挤掉对话区；
+`--no-logo` / `ARENA_NO_LOGO=1` 可以强制关掉。
 
 | 键 | 行为 |
 | --- | --- |
@@ -245,13 +259,13 @@ GET  /history?session=<name>
 
 ## 9. 测试
 
-### 单元测试：122 个，`cargo test` 或 `bash scripts/check.sh`
+### 单元测试：125 个，`cargo test` 或 `bash scripts/check.sh`
 
 覆盖要求里点名的四类，且每类都不是走过场：
 
 | 模块 | 覆盖内容 | 数量 |
 | --- | --- | --- |
-| `ui` | 帧行数=终端行数、任意宽度不越界、状态栏六要素、spinner+秒数、折叠/展开文案、`↓ 新内容`、验证态转红、空态、极小终端不 panic、LOGO、工具摘要 | 11 |
+| `ui` | 帧行数=终端行数、任意宽度不越界、状态栏六要素、spinner+秒数、折叠/展开文案、`↓ 新内容`、验证态转红、空态、极小终端不 panic、LOGO、常驻 LOGO 头（含窄终端收起、带色对齐）、工具摘要 | 14 |
 | `app` | 输入编辑（含中英混合光标）、历史、多行、模式命令、Tab 补全、滚动跟随/回底恢复、流式块累积、旧回合丢弃、错误落块、相对时间 | 15 |
 | `keys` | 方向键、PgUp/PgDn、Ctrl 组合、UTF-8 分片、ESC 序列分片、CSI-u 的 Shift+Enter、Tab/BackTab、未知序列不 panic | 14 |
 | `width` | CJK/假名/谚文宽 2、组合符号宽 0、emoji 宽 2、按显示宽度折行（不切断宽字符）、混合中英、超长词强断、制表符/CRLF、任意宽度不越界 | 12 |
@@ -292,7 +306,7 @@ arena-lite/
 └── src/
     ├── main.rs           # 参数、子命令、单发、TUI 主循环
     ├── app.rs            # 状态机：输入编辑/斜杠命令/流式回合/滚动跟随
-    ├── ui.rs             # 渲染：状态栏/对话区/输入区/LOGO
+    ├── ui.rs             # 渲染：LOGO 头/对话区/输入区/状态栏
     ├── client.rs         # 桥客户端：SSE、事件分发、工具行拆分
     ├── httpc.rs          # 手写 HTTP/1.1（identity + chunked）
     ├── sse.rs            # SSE 分帧 + 增量 UTF-8 解码

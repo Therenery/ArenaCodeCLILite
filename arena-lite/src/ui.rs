@@ -108,7 +108,19 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
         wrap(&app.input, input_w).len()
     };
     let input_h = input_lines.clamp(1, 3);
-    let chat_h = h.saturating_sub(4 + input_h).max(1);
+    let logo_w = theme::LOGO_LINES
+        .iter()
+        .map(|l| str_width(l))
+        .max()
+        .unwrap_or(0);
+    // 常驻 LOGO：终端够高够宽才展开，否则退回单行状态栏
+    let show_logo = app.cfg.logo && h >= 22 && w >= 62;
+    let header_h = if show_logo {
+        theme::LOGO_LINES.len() + 1
+    } else {
+        2
+    };
+    let chat_h = h.saturating_sub(header_h + input_h + 2).max(1);
 
     app.view_h = chat_h;
 
@@ -139,7 +151,11 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     }
 
     let mut rows: Vec<String> = Vec::with_capacity(h);
-    rows.push(status_row(app, w, th).styled);
+    if show_logo {
+        rows.extend(logo_header_rows(app, w, th, logo_w));
+    } else {
+        rows.push(status_row(app, w, th).styled);
+    }
     rows.push(th.dim(&repeat('─', w)));
     for row in chat_rows {
         rows.push(row.styled);
@@ -153,6 +169,89 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     // 终端比预期矮时截断，绝不画到屏幕外
     rows.truncate(h);
     rows
+}
+
+/// 常驻 LOGO + 右侧信息栏。LOGO 靠左，信息块贴右，宽度不够时自动收窄。
+fn logo_header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
+    let logo = theme::logo_ansi(th);
+    let info_w = 34.min(w.saturating_sub(logo_w + 6));
+    let start = w.saturating_sub(info_w);
+    let mut out = Vec::with_capacity(logo.len());
+    for (i, line) in logo.iter().enumerate() {
+        let mut row = Row::new();
+        row.push_plain("  ");
+        row.push_plain(line);
+        // line 里带 ANSI，Row::width 会把它算进宽度，所以按纯文本宽度自己补空格
+        let pad = start.saturating_sub(2 + str_width(theme::LOGO_LINES[i]));
+        if pad > 0 {
+            row.push_plain(&" ".repeat(pad));
+        }
+        if info_w >= 10 {
+            header_info(&mut row, app, th, i, info_w);
+        }
+        out.push(row.styled);
+    }
+    out
+}
+
+fn header_info(row: &mut Row, app: &App, th: &Theme, i: usize, avail: usize) {
+    if i == 4 {
+        let (dot, pal, note) = bridge_state(app);
+        let (text, text_pal) = if note.is_empty() {
+            (format!("桥    {}", app.cfg.base_display), Some(Palette::Dim))
+        } else {
+            (format!("桥    {}", note), Some(Palette::Error))
+        };
+        let head = fit(&text, avail.saturating_sub(2));
+        row.push(th, &head, text_pal, false);
+        row.push(th, " ", None, false);
+        row.push(th, dot, Some(pal), false);
+        return;
+    }
+    let (text, pal, bold) = match i {
+        0 => ("arena-lite 2.0".to_string(), Some(Palette::Accent), true),
+        1 => (format!("模式  {}", app.mode().label()), None, false),
+        2 => (format!("会话  {}", app.cfg.session), None, false),
+        3 => (format!("模型  {}", app.model_label()), Some(Palette::Dim), false),
+        _ => {
+            let verifying = app.stream.as_ref().map(|s| s.verifying).unwrap_or(false);
+            if verifying {
+                ("⚠ 需要人工验证".to_string(), Some(Palette::Error), true)
+            } else if let Some(st) = &app.stream {
+                let elapsed = st.started.elapsed().as_secs_f64();
+                let frame = SPINNER[((elapsed * 9.0) as usize) % SPINNER.len()];
+                (format!("{}  {:.1}s", frame, elapsed), Some(Palette::Accent), false)
+            } else {
+                ("Ctrl+N 会话 · /help".to_string(), Some(Palette::Dim), false)
+            }
+        }
+    };
+    let text = fit(&text, avail);
+    row.push(th, &text, pal, bold);
+}
+
+fn bridge_state(app: &App) -> (&'static str, Palette, String) {
+    match &app.health {
+        HealthState::Unknown => ("?", Palette::Dim, String::new()),
+        HealthState::Up(h) => {
+            if h.ok && h.chrome {
+                ("●", Palette::Good, String::new())
+            } else if h.ok {
+                ("○", Palette::Warn, "Chrome 未启动".to_string())
+            } else {
+                ("○", Palette::Error, "桥不通".to_string())
+            }
+        }
+        HealthState::Down(why) => ("○", Palette::Error, why.clone()),
+    }
+}
+
+/// 单行信息按可用宽度裁一刀（CJK 按两格算）
+fn fit(text: &str, avail: usize) -> String {
+    if avail == 0 {
+        return String::new();
+    }
+    wrap(text, avail).into_iter().next().unwrap_or_default()
 }
 
 fn repeat(c: char, n: usize) -> String {
@@ -649,6 +748,7 @@ mod tests {
                 mode,
                 models: Vec::new(),
                 reasoning_open: false,
+                logo: true,
             },
         )
     }
@@ -700,6 +800,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn logo_header_is_persistent_and_fits() {
+        let mut a = app(Mode::Agent);
+        a.health = HealthState::Up(Health {
+            ok: true,
+            chrome: true,
+            ..Default::default()
+        });
+        let th = Theme::new(false);
+        let rows = render_rows(&mut a, Size { cols: 100, rows: 30 }, &th);
+        let plain: Vec<String> = rows.iter().map(|r| strip_ansi(r)).collect();
+        let joined = plain.join("\n");
+        assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
+        assert!(joined.contains("arena-lite 2.0"));
+        assert!(joined.contains("模式"));
+        assert!(joined.contains("会话"));
+        for line in &plain {
+            assert!(str_width(line) <= 100, "越界: {:?}", line);
+        }
+    }
+
+    #[test]
+    fn logo_header_aligns_info_column_with_color() {
+        let mut a = app(Mode::Agent);
+        let th = Theme::new(true);
+        let rows = render_rows(&mut a, Size { cols: 100, rows: 30 }, &th);
+        let plain = strip_ansi(&rows[0]);
+        let idx = plain.find("arena-lite 2.0").expect("缺少标题");
+        assert_eq!(str_width(&plain[..idx]), 66);
+    }
+
+    #[test]
+    fn logo_header_falls_back_on_short_terminal() {
+        let mut a = app(Mode::Agent);
+        let th = Theme::new(false);
+        let plain = strip_ansi(&render(&mut a, Size { cols: 80, rows: 20 }, &th));
+        assert!(!plain.contains("█████╗"));
+        assert!(plain.contains("arena"));
+        a.cfg.logo = false;
+        let plain = strip_ansi(&render(&mut a, Size { cols: 100, rows: 30 }, &th));
+        assert!(!plain.contains("█████╗"));
     }
 
     #[test]

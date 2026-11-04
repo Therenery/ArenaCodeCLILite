@@ -681,6 +681,7 @@ fn run_tui(opts: &Opts, session_override: Option<String>, preload: Option<Vec<Ch
         mode: opts.mode,
         models: opts.models.clone(),
         reasoning_open: opts.reasoning,
+        logo: opts.logo,
     };
     let mut app = App::new(Arc::clone(&client), tx.clone(), cfg);
     if let Some(hist) = preload {

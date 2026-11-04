@@ -65,6 +65,7 @@ pub struct Config {
     pub mode: Mode,
     pub models: Vec<String>,
     pub reasoning_open: bool,
+    pub logo: bool,
 }
 
 pub struct App {
@@ -1246,6 +1247,7 @@ mod tests {
             mode,
             models: Vec::new(),
             reasoning_open: false,
+            logo: true,
         };
         App::new(client, tx, cfg)
     }
