@@ -8,7 +8,6 @@ use crate::term::Size;
 use crate::theme::{self, Palette, Theme};
 use crate::width::{str_width, wrap};
 
-const INPUT_INDENT: usize = 2;
 const USER_PREFIX: &str = "你 › ";
 const BOT_PREFIX: &str = "arena ❯ ";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -101,7 +100,7 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     let h = size.rows as usize;
 
     // 输入区高度：最多 3 行
-    let input_w = w.saturating_sub(INPUT_INDENT * 2).max(4);
+    let input_w = w.saturating_sub(2).max(4);
     let input_lines = if app.input.is_empty() {
         1
     } else {
@@ -113,14 +112,19 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
         .map(|l| str_width(l))
         .max()
         .unwrap_or(0);
-    // 常驻 LOGO：终端够高够宽才展开，否则退回单行状态栏
-    let show_logo = app.cfg.logo && h >= 22 && w >= 62;
-    let header_h = if show_logo {
-        theme::LOGO_LINES.len() + 1
+    // 宽屏 LOGO 与信息框并排，窄屏上下摞，再窄就退回单行状态栏
+    let logo_h = theme::LOGO_LINES.len();
+    let side = app.cfg.logo && info_box_w(w, logo_w) >= 28;
+    let stacked = app.cfg.logo && !side && w >= logo_w + 2 && h >= 26;
+    let header_h = if side {
+        logo_h + 1
+    } else if stacked {
+        logo_h + 4
     } else {
-        2
+        1
     };
-    let chat_h = h.saturating_sub(header_h + input_h + 2).max(1);
+    // 输入框自带上下边框，占 input_h + 2 行
+    let chat_h = h.saturating_sub(header_h + input_h + 3).max(1);
 
     app.view_h = chat_h;
 
@@ -151,16 +155,17 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     }
 
     let mut rows: Vec<String> = Vec::with_capacity(h);
-    if show_logo {
-        rows.extend(logo_header_rows(app, w, th, logo_w));
+    if side || stacked {
+        rows.extend(header_rows(app, w, th, logo_w));
+        if side {
+            rows.push(th.dim(&repeat('─', w)));
+        }
     } else {
         rows.push(status_row(app, w, th).styled);
     }
-    rows.push(th.dim(&repeat('─', w)));
     for row in chat_rows {
         rows.push(row.styled);
     }
-    rows.push(th.dim(&repeat('─', w)));
     for row in input_rows(app, w, input_h, th) {
         rows.push(row);
     }
@@ -171,63 +176,159 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     rows
 }
 
-/// 常驻 LOGO + 右侧信息栏。LOGO 靠左，信息块贴右，宽度不够时自动收窄。
-fn logo_header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
+/// 顶部信息框宽度（含边框）。宽屏贴 LOGO 右侧，窄屏占满整行。
+fn info_box_w(w: usize, logo_w: usize) -> usize {
+    w.saturating_sub(logo_w + 4).min(46)
+}
+
+/// 顶部：LOGO + 信息框。宽屏并排，窄屏上下摞。
+fn header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
     let logo = theme::logo_ansi(th);
-    let info_w = 34.min(w.saturating_sub(logo_w + 6));
-    let start = w.saturating_sub(info_w);
-    let mut out = Vec::with_capacity(logo.len());
-    for (i, line) in logo.iter().enumerate() {
+    let rows = logo.len();
+    let box_w = info_box_w(w, logo_w);
+
+    if box_w >= 28 {
+        // 紧贴 LOGO 右侧，剩下的宽度留白，跟 Qwen Code 一样
+        let start = 2 + logo_w + 2;
+        let mut out = Vec::with_capacity(rows);
+        for (i, line) in logo.iter().enumerate() {
+            let mut row = Row::new();
+            row.push_plain("  ");
+            row.push_plain(line);
+            // line 里带 ANSI，Row::width 会把它算进宽度，所以按纯文本宽度自己补空格
+            let pad = start.saturating_sub(2 + str_width(theme::LOGO_LINES[i]));
+            if pad > 0 {
+                row.push_plain(&" ".repeat(pad));
+            }
+            info_cell(&mut row, app, th, i, rows, box_w);
+            out.push(row.styled);
+        }
+        return out;
+    }
+
+    // 窄屏：LOGO 顶天，信息框摞在下面
+    let mut out: Vec<String> = Vec::with_capacity(rows + 4);
+    for line in logo.iter() {
         let mut row = Row::new();
         row.push_plain("  ");
         row.push_plain(line);
-        // line 里带 ANSI，Row::width 会把它算进宽度，所以按纯文本宽度自己补空格
-        let pad = start.saturating_sub(2 + str_width(theme::LOGO_LINES[i]));
-        if pad > 0 {
-            row.push_plain(&" ".repeat(pad));
-        }
-        if info_w >= 10 {
-            header_info(&mut row, app, th, i, info_w);
-        }
         out.push(row.styled);
     }
+    out.push(th.dim(&format!("┌{}┐", repeat('─', w.saturating_sub(2)))));
+    for i in 0..2 {
+        out.push(box_line(w, th, |r| compact_info(r, app, th, i, w.saturating_sub(4))));
+    }
+    out.push(th.dim(&format!("└{}┘", repeat('─', w.saturating_sub(2)))));
     out
 }
 
-fn header_info(row: &mut Row, app: &App, th: &Theme, i: usize, avail: usize) {
-    if i == 4 {
-        let (dot, pal, note) = bridge_state(app);
-        let (text, text_pal) = if note.is_empty() {
-            (format!("桥    {}", app.cfg.base_display), Some(Palette::Dim))
-        } else {
-            (format!("桥    {}", note), Some(Palette::Error))
-        };
-        let head = fit(&text, avail.saturating_sub(2));
-        row.push(th, &head, text_pal, false);
-        row.push(th, " ", None, false);
-        row.push(th, dot, Some(pal), false);
+/// 并排模式：信息框第 i 行（0 是上边框，最后一行是下边框）
+fn info_cell(row: &mut Row, app: &App, th: &Theme, i: usize, rows: usize, box_w: usize) {
+    let inner = box_w.saturating_sub(2);
+    if i == 0 {
+        row.push(th, &format!("┌{}┐", repeat('─', inner)), Some(Palette::Dim), false);
         return;
     }
-    let (text, pal, bold) = match i {
-        0 => ("arena-lite 2.0".to_string(), Some(Palette::Accent), true),
-        1 => (format!("模式  {}", app.mode().label()), None, false),
-        2 => (format!("会话  {}", app.cfg.session), None, false),
-        3 => (format!("模型  {}", app.model_label()), Some(Palette::Dim), false),
-        _ => {
-            let verifying = app.stream.as_ref().map(|s| s.verifying).unwrap_or(false);
-            if verifying {
-                ("⚠ 需要人工验证".to_string(), Some(Palette::Error), true)
-            } else if let Some(st) = &app.stream {
-                let elapsed = st.started.elapsed().as_secs_f64();
-                let frame = SPINNER[((elapsed * 9.0) as usize) % SPINNER.len()];
-                (format!("{}  {:.1}s", frame, elapsed), Some(Palette::Accent), false)
-            } else {
-                ("Ctrl+N 会话 · /help".to_string(), Some(Palette::Dim), false)
+    if i + 1 == rows {
+        row.push(th, &format!("└{}┘", repeat('─', inner)), Some(Palette::Dim), false);
+        return;
+    }
+    let content_w = box_w.saturating_sub(4);
+    let mut content = Row::new();
+    wide_info(&mut content, app, th, i - 1, content_w);
+    let pad = content_w.saturating_sub(content.width);
+    row.push(th, "│ ", Some(Palette::Dim), false);
+    row.styled.push_str(&content.styled);
+    row.width += content.width;
+    if pad > 0 {
+        row.push_plain(&" ".repeat(pad));
+    }
+    row.push(th, " │", Some(Palette::Dim), false);
+}
+
+/// 边框内的一行：左右各一根竖线，内容不足就补空格
+fn box_line(w: usize, th: &Theme, build: impl FnOnce(&mut Row)) -> String {
+    let inner = w.saturating_sub(4);
+    let mut content = Row::new();
+    build(&mut content);
+    let pad = inner.saturating_sub(content.width);
+    let mut row = Row::new();
+    row.push(th, "│ ", Some(Palette::Dim), false);
+    row.styled.push_str(&content.styled);
+    row.width += content.width;
+    if pad > 0 {
+        row.push_plain(&" ".repeat(pad));
+    }
+    row.push(th, " │", Some(Palette::Dim), false);
+    row.styled
+}
+
+/// 信息框正文（4 行）：标题 / 生成进度 / 模式|模型 / 会话·桥
+fn wide_info(row: &mut Row, app: &App, th: &Theme, idx: usize, avail: usize) {
+    match idx {
+        0 => {
+            let title = ">_ arena-lite";
+            row.push(th, &fit(title, avail), Some(Palette::Accent), true);
+            let rest = avail.saturating_sub(str_width(title));
+            if rest >= 9 {
+                row.push(th, &fit(&format!(" ({})", crate::VERSION), rest), Some(Palette::Dim), false);
             }
         }
+        1 => {
+            if let Some(st) = &app.stream {
+                if st.verifying {
+                    row.push(th, &fit("⚠ 需要人工验证", avail), Some(Palette::Error), true);
+                } else {
+                    let elapsed = st.started.elapsed().as_secs_f64();
+                    let frame = SPINNER[((elapsed * 9.0) as usize) % SPINNER.len()];
+                    let text = format!("{} {:.1}s", frame, elapsed);
+                    row.push(th, &fit(&text, avail), Some(Palette::Accent), false);
+                }
+            }
+        }
+        2 => {
+            let text = format!("{} | {}", app.mode().label(), app.model_label());
+            row.push(th, &fit(&text, avail), Some(Palette::Dim), false);
+        }
+        _ => {
+            let (dot, pal, note) = bridge_state(app);
+            let tail = if note.is_empty() {
+                app.cfg.base_display.clone()
+            } else {
+                note
+            };
+            let text = format!("{} · {}", app.cfg.session, tail);
+            let head = fit(&text, avail.saturating_sub(2));
+            row.push(th, &head, Some(Palette::Dim), false);
+            row.push(th, " ", None, false);
+            row.push(th, dot, Some(pal), false);
+        }
+    }
+}
+
+/// 窄屏只给两行：标题 / 其余压成一行
+fn compact_info(row: &mut Row, app: &App, th: &Theme, idx: usize, avail: usize) {
+    if idx == 0 {
+        wide_info(row, app, th, 0, avail);
+        return;
+    }
+    let (dot, pal, note) = bridge_state(app);
+    let tail = if note.is_empty() {
+        app.cfg.base_display.clone()
+    } else {
+        note
     };
-    let text = fit(&text, avail);
-    row.push(th, &text, pal, bold);
+    let text = format!(
+        "{} | {} · {} · {}",
+        app.mode().label(),
+        app.model_label(),
+        app.cfg.session,
+        tail
+    );
+    let head = fit(&text, avail.saturating_sub(2));
+    row.push(th, &head, Some(Palette::Dim), false);
+    row.push(th, " ", None, false);
+    row.push(th, dot, Some(pal), false);
 }
 
 fn bridge_state(app: &App) -> (&'static str, Palette, String) {
@@ -387,8 +488,9 @@ fn hint_row(app: &App, w: usize, th: &Theme) -> Row {
 /* ------------------------------ 输入区 ------------------------------ */
 
 fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String> {
-    let avail = w.saturating_sub(INPUT_INDENT * 2).max(4);
-    let mut out: Vec<String> = Vec::with_capacity(input_h);
+    let avail = w.saturating_sub(2).max(4);
+    let mut out: Vec<String> = Vec::with_capacity(input_h + 2);
+    out.push(input_top(app, w, th));
 
     let lines: Vec<String> = if app.input.is_empty() {
         vec![String::new()]
@@ -406,7 +508,7 @@ fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String
         let idx = start + i;
         let mut row = Row::new();
         if i == 0 {
-            row.push(th, "› ", Some(Palette::Accent), true);
+            row.push(th, "> ", Some(Palette::Accent), true);
         } else {
             row.push_plain("  ");
         }
@@ -425,7 +527,24 @@ fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String
         }
         out.push(row.styled);
     }
+    out.push(th.dim(&repeat('─', w)));
     out
+}
+
+/// 输入框顶边：右下角挂当前会话名，和 Qwen Code 一个样式
+fn input_top(app: &App, w: usize, th: &Theme) -> String {
+    let label = format!(" {} ", app.cfg.session);
+    let lw = str_width(&label);
+    if lw + 6 <= w {
+        let dashes = w - lw - 2;
+        let mut s = String::new();
+        s.push_str(&th.dim(&repeat('─', dashes)));
+        s.push_str(&th.paint(&label, Palette::Accent));
+        s.push_str(&th.dim("──"));
+        s
+    } else {
+        th.dim(&repeat('─', w))
+    }
 }
 
 /// 在字符位置画出反显光标
@@ -480,13 +599,21 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
     let mut out: Vec<Line> = Vec::new();
     if app.blocks.is_empty() {
         out.push(Line::new("", None));
-        out.push(Line::new(" arena-lite · 终端里的 arena_bridge 客户端", Some(Palette::System)).bold());
+        out.push(Line::new(" Tips for getting started:", Some(Palette::Dim)).bold());
         out.push(Line::new("", None));
-        for l in wrap(
-            "直接输入问题回车发送。/agent、/direct、/side、/battle 切换常驻模式；/resume 打开网页端会话；/help 看全部命令。",
-            w.saturating_sub(2).max(10),
-        ) {
-            out.push(Line::new(format!(" {}", l), Some(Palette::Dim)));
+        let tips = [
+            "直接输入问题，Enter 发送；Shift+Enter 换行",
+            "/resume 打开网页端会话，/sessions 看桥上的会话",
+            "/agent /direct /side /battle 切模式，/help 看全部命令",
+        ];
+        for (i, t) in tips.iter().enumerate() {
+            for (j, l) in wrap(t, w.saturating_sub(6).max(10)).iter().enumerate() {
+                if j == 0 {
+                    out.push(Line::new(format!(" {}. {}", i + 1, l), Some(Palette::Dim)));
+                } else {
+                    out.push(Line::new(format!("    {}", l), Some(Palette::Dim)));
+                }
+            }
         }
         out.push(Line::new("", None));
         return out;
@@ -671,59 +798,6 @@ fn render_value(v: &json::Value) -> String {
     }
 }
 
-/* ------------------------------ LOGO ------------------------------ */
-
-pub fn render_logo(size: Size, th: &Theme) -> String {
-    let size = size.sane();
-    let w = size.cols as usize;
-    let h = size.rows as usize;
-    let full_w = theme::LOGO_LINES
-        .iter()
-        .map(|l| str_width(l))
-        .max()
-        .unwrap_or(0);
-    // 终端比 logo 还窄就退化成一行文字，别让它折行糊成一团
-    let (logo, logo_w) = if w < full_w + 2 {
-        (vec![th.paint_bold("ARENA", Palette::Accent)], 5usize)
-    } else {
-        (theme::logo_ansi(th), full_w)
-    };
-    let logo_h = logo.len();
-    let top = h.saturating_sub(logo_h + 3) / 2;
-    let indent = " ".repeat(w.saturating_sub(logo_w) / 2);
-    let mut out = String::new();
-    out.push_str(theme::CURSOR_HIDE);
-    for r in 0..h {
-        out.push_str(&theme::goto((r + 1) as u16, 1));
-        out.push_str(theme::CLEAR_LINE);
-    }
-    for (i, line) in logo.iter().enumerate() {
-        let row = top + i + 1;
-        if row > h {
-            break;
-        }
-        out.push_str(&theme::goto(row as u16, 1));
-        out.push_str(theme::CLEAR_LINE);
-        out.push_str(&indent);
-        out.push_str(line);
-    }
-    let hint = "arena-lite 2.0 · Enter 发送 · /help 命令";
-    let hint_row = top + logo_h + 2;
-    if hint_row <= h {
-        out.push_str(&theme::goto(hint_row as u16, 1));
-        out.push_str(theme::CLEAR_LINE);
-        out.push_str(&" ".repeat(w.saturating_sub(str_width(hint)) / 2));
-        out.push_str(&th.dim(hint));
-    }
-    if h >= 2 {
-        out.push_str(&theme::goto(h as u16, 1));
-        out.push_str(theme::CLEAR_LINE);
-        out.push_str(&th.dim("按任意键跳过"));
-    }
-    out.push_str(theme::CURSOR_SHOW);
-    out
-}
-
 /* ------------------------------ 测试 ------------------------------ */
 
 #[cfg(test)]
@@ -815,9 +889,11 @@ mod tests {
         let plain: Vec<String> = rows.iter().map(|r| strip_ansi(r)).collect();
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
-        assert!(joined.contains("arena-lite 2.0"));
-        assert!(joined.contains("模式"));
-        assert!(joined.contains("会话"));
+        assert!(joined.contains(">_ arena-lite"), "缺少信息框标题");
+        assert!(joined.contains("(2.0.0)"), "缺少版本号");
+        assert!(joined.contains("agent | arena-agent"), "缺少模式|模型");
+        assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
+        assert!(joined.contains('┌') && joined.contains('└'), "缺少边框");
         for line in &plain {
             assert!(str_width(line) <= 100, "越界: {:?}", line);
         }
@@ -829,20 +905,37 @@ mod tests {
         let th = Theme::new(true);
         let rows = render_rows(&mut a, Size { cols: 100, rows: 30 }, &th);
         let plain = strip_ansi(&rows[0]);
-        let idx = plain.find("arena-lite 2.0").expect("缺少标题");
-        assert_eq!(str_width(&plain[..idx]), 66);
+        let idx = plain.find('┌').expect("缺少边框");
+        // LOGO 2 边距 + 46 宽 + 2 间隔，信息框从第 50 列开始
+        assert_eq!(str_width(&plain[..idx]), 50);
     }
 
     #[test]
     fn logo_header_falls_back_on_short_terminal() {
         let mut a = app(Mode::Agent);
         let th = Theme::new(false);
-        let plain = strip_ansi(&render(&mut a, Size { cols: 80, rows: 20 }, &th));
+        // 太窄：连 LOGO 都放不下，退回单行状态栏
+        let plain = strip_ansi(&render(&mut a, Size { cols: 40, rows: 20 }, &th));
         assert!(!plain.contains("█████╗"));
         assert!(plain.contains("arena"));
+        // 中等宽度：LOGO 在上，信息框摞在下面
+        let plain = strip_ansi(&render(&mut a, Size { cols: 61, rows: 30 }, &th));
+        assert!(plain.contains("█████╗"));
+        assert!(plain.contains('┌'));
+        // 显式关掉
         a.cfg.logo = false;
         let plain = strip_ansi(&render(&mut a, Size { cols: 100, rows: 30 }, &th));
         assert!(!plain.contains("█████╗"));
+    }
+
+    #[test]
+    fn input_box_carries_session_label() {
+        let mut a = app(Mode::Agent);
+        let rows = render_rows(&mut a, Size { cols: 100, rows: 30 }, &Theme::new(false));
+        let joined: Vec<String> = rows.iter().map(|r| strip_ansi(r)).collect();
+        let text = joined.join("\n");
+        assert!(text.contains(" main ──"), "顶边没挂会话名：{}", text);
+        assert!(text.contains("\n> "), "输入行前缀不对");
     }
 
     #[test]
@@ -932,7 +1025,7 @@ mod tests {
     fn empty_state_renders_without_panic() {
         let mut a = app(Mode::Agent);
         let frame = render(&mut a, Size { cols: 40, rows: 12 }, &Theme::new(false));
-        assert!(strip_ansi(&frame).contains("arena-lite"));
+        assert!(strip_ansi(&frame).contains("arena"));
     }
 
     #[test]
@@ -942,12 +1035,6 @@ mod tests {
         for (cols, rows) in [(20u16, 6u16), (21, 7), (30, 8), (80, 24)] {
             let _ = render(&mut a, Size { cols, rows }, &Theme::new(false));
         }
-    }
-
-    #[test]
-    fn logo_frame_has_logo_lines() {
-        let frame = render_logo(Size { cols: 80, rows: 24 }, &Theme::new(false));
-        assert!(strip_ansi(&frame).contains("arena-lite"));
     }
 
     #[test]
@@ -965,4 +1052,6 @@ mod tests {
         // 防止 ui 里的 import 被当成未使用而报警告
         let _ = StreamEvent::Text(String::new());
     }
+
+
 }

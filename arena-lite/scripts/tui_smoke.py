@@ -21,7 +21,7 @@ COLS, ROWS = 100, 30
 def spawn():
     pid, fd = pty.fork()
     if pid == 0:
-        os.execv(BIN, [BIN, "--no-logo", "--base", BASE])
+        os.execv(BIN, [BIN, "--base", BASE])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     return pid, fd
 
@@ -66,9 +66,13 @@ def main():
             failures.append(name)
 
     screen = strip_ansi("".join(out))
+    check("顶部有常驻 LOGO", "█████" in screen)
+    check("信息框有标题", ">_ arena-lite" in screen)
     check("状态栏有模式 agent", "agent" in screen)
     check("状态栏有桥地址", BASE.split(":")[0] in screen)
     check("底部输入提示", "Enter 发送" in screen)
+    check("启动时说明这是新会话", "新会话" in screen)
+    check("列出桥上的旧会话", "设计" in screen)
 
     # 输入并发送
     out.clear()

@@ -22,7 +22,7 @@ mod width;
 use std::io::{IsTerminal, Write};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use app::{App, Config};
 use client::{ChatOpts, Client, Msg as ChatMsg, StreamEvent};
@@ -54,6 +54,10 @@ struct Opts {
     base: String,
     token: Option<String>,
     session: String,
+    /// 用户显式指定过会话名（-s / ARENA_SESSION）
+    session_given: bool,
+    /// 启动时桥上已有的会话名，用来提示「还有别的会话」
+    existing: Vec<String>,
     mode: Mode,
     models: Vec<String>,
     logo: bool,
@@ -80,6 +84,10 @@ fn parse_args(args: Vec<String>) -> Opts {
             .or_else(|| std::env::var("ARB_TOKEN").ok())
             .filter(|t| !t.trim().is_empty()),
         session: std::env::var("ARENA_SESSION").unwrap_or_else(|_| "main".to_string()),
+        session_given: std::env::var("ARENA_SESSION")
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false),
+        existing: Vec::new(),
         mode: std::env::var("ARENA_MODE")
             .ok()
             .and_then(|m| Mode::parse(&m))
@@ -117,6 +125,7 @@ fn parse_args(args: Vec<String>) -> Opts {
             "--session" | "-s" => match next(i) {
                 Some(v) => {
                     opts.session = v;
+                    opts.session_given = true;
                     i += 1;
                 }
                 None => opts.cmd = Cmd::BadUsage("--session 后面要跟会话名".into()),
@@ -231,7 +240,7 @@ fn usage() -> String {
     s.push_str("  arena-lite resume [编号|链接] [问题] 列出网页端会话，或打开指定会话（有终端就进 TUI）\n\n");
     s.push_str("选项：\n");
     s.push_str("  -m, --mode <agent|direct|side|battle>   常驻模式，默认 agent\n");
-    s.push_str("  -s, --session <名字>                    会话名，默认 main\n");
+    s.push_str("  -s, --session <名字>                    会话名，默认自动挑空位（main、main-2…）\n");
     s.push_str("      --models <a,b>                      双栏两栏用的模型\n");
     s.push_str("      --base <地址>                       桥地址，默认 127.0.0.1:17892\n");
     s.push_str("      --token <值>                        桥设了 ARB_TOKEN 时必填\n");
@@ -250,7 +259,8 @@ fn usage() -> String {
 fn main() {
     term::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let opts = parse_args(args);
+    let mut opts = parse_args(args);
+    resolve_session(&mut opts);
 
     let code = match &opts.cmd {
         Cmd::Version => {
@@ -278,6 +288,37 @@ fn main() {
         },
     };
     std::process::exit(code);
+}
+
+/// 没显式指定会话时，给这次启动挑一个新名字，并记下桥上已有的会话。
+/// 这样每开一个 CLI 都是一段新对话，不会再接上上次的 main。
+fn resolve_session(opts: &mut Opts) {
+    if opts.session_given || !matches!(opts.cmd, Cmd::Tui { .. } | Cmd::OneShot { .. }) {
+        return;
+    }
+    let client = match build_client(opts) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if let Ok(h) = client.health() {
+        opts.session = fresh_session(&h.sessions);
+        opts.existing = h.sessions;
+    }
+}
+
+/// main 被占了就找 main-2、main-3……第一个空位
+fn fresh_session(existing: &[String]) -> String {
+    if !existing.iter().any(|s| s == "main") {
+        return "main".to_string();
+    }
+    let mut n = 2usize;
+    loop {
+        let cand = format!("main-{}", n);
+        if !existing.iter().any(|s| *s == cand) {
+            return cand;
+        }
+        n += 1;
+    }
 }
 
 fn build_client(opts: &Opts) -> Result<Client, String> {
@@ -651,30 +692,6 @@ fn run_tui(opts: &Opts, session_override: Option<String>, preload: Option<Vec<Ch
     let _ = write!(so, "{}{}", theme::ALT_SCREEN_ON, theme::CLEAR_SCREEN);
     let _ = so.flush();
 
-    // LOGO
-    if opts.logo {
-        let size = term::size();
-        let _ = write!(so, "{}", ui::render_logo(size, &th));
-        let _ = so.flush();
-        // 按任意键或 1 秒后消失
-        let start = Instant::now();
-        let mut skipped = false;
-        while start.elapsed() < Duration::from_millis(1000) {
-            let left = Duration::from_millis(1000).saturating_sub(start.elapsed());
-            match rx.recv_timeout(left.min(Duration::from_millis(120))) {
-                Ok(Msg::Key(_)) => {
-                    skipped = true;
-                    break;
-                }
-                Ok(_) => continue,
-                Err(_) => continue,
-            }
-        }
-        let _ = skipped;
-        let _ = write!(so, "{}{}", theme::CLEAR_SCREEN, theme::CURSOR_HIDE);
-        let _ = so.flush();
-    }
-
     let cfg = Config {
         base_display: client.base.display(),
         session: session_override.unwrap_or_else(|| opts.session.clone()),
@@ -701,12 +718,24 @@ fn run_tui(opts: &Opts, session_override: Option<String>, preload: Option<Vec<Ch
             app.push_system("已载入历史，接着聊就行");
         }
     }
-    app.push_system(format!(
-        "连上 {} · 模式 {} · 会话 {}",
+    let mut hello = format!(
+        "连上 {} · 模式 {} · {} {}",
         client.base.display(),
         app.mode().label(),
+        if opts.session_given { "会话" } else { "新会话" },
         app.cfg.session
-    ));
+    );
+    if !opts.session_given && !opts.existing.is_empty() {
+        let names: Vec<String> = opts.existing.iter().take(6).cloned().collect();
+        let more = if opts.existing.len() > names.len() { " 等" } else { "" };
+        hello.push_str(&format!(
+            "\n桥上还有 {} 个会话：{}{}（/sessions 看详情，/session <名字> 切过去）",
+            opts.existing.len(),
+            names.join("、"),
+            more
+        ));
+    }
+    app.push_system(hello);
 
     // 读键线程
     term::spawn_input(tx.clone());
@@ -870,6 +899,20 @@ mod tests {
             opts_of(&["resume"]).cmd,
             Cmd::Resume { target: None, .. }
         ));
+    }
+
+    #[test]
+    fn fresh_session_avoids_taken_names() {
+        assert_eq!(fresh_session(&[]), "main");
+        assert_eq!(fresh_session(&["other".to_string()]), "main");
+        assert_eq!(
+            fresh_session(&["main".to_string()]),
+            "main-2"
+        );
+        assert_eq!(
+            fresh_session(&["main".to_string(), "main-2".to_string(), "x".to_string()]),
+            "main-3"
+        );
     }
 
     #[test]

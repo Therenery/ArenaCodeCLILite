@@ -5,6 +5,8 @@ const http = require('http');
 const PORT = Number(process.env.PORT || 17899);
 let history = [];
 let verifyLeft = Number(process.env.VERIFY_TIMES || 0);
+// 哪些会话有标签页（能读 history）。/open 过的会加进来。
+const known = new Set(['main', '设计']);
 
 const sse = (res) => {
   res.writeHead(200, {
@@ -52,12 +54,17 @@ http
         );
       }
       if (u.pathname === '/open' && req.method === 'POST') {
+        // 打开之后这个会话就有标签页了，history 也就能读
+        try {
+          const b = JSON.parse(body || '{}');
+          if (b.session) known.add(String(b.session));
+        } catch (e) {}
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, session: 'main', url: '/agent/conv1' }));
       }
       if (u.pathname === '/history') {
         const name = u.searchParams.get('session') || 'main';
-        if (name !== 'main' && name !== '设计') {
+        if (!known.has(name)) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ ok: false, error: 'no session' }));
         }

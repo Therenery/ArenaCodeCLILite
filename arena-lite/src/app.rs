@@ -587,14 +587,16 @@ impl App {
                 Some(e) => format!("  ⚠ {}", truncate(e, 40)),
                 None => String::new(),
             };
+            let mark = if s.name == self.cfg.session { "  ← 当前" } else { "" };
             self.push_system(format!(
-                "  {}. {}  ·  {} 条 · {}  ·  {}{}",
+                "  {}. {}  ·  {} 条 · {}  ·  {}{}{}",
                 i + 1,
                 s.name,
                 s.turns,
                 when,
                 last,
-                extra
+                extra,
+                mark
             ));
         }
     }
