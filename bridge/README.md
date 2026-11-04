@@ -43,13 +43,16 @@ arena_bridge.js（node，无第三方依赖）
 
 ## 快速开始
 
-电脑侧（Windows，需 Chrome 与 node）：
+任意系统，只要有 node ≥ 21 和 Chrome（Edge / Chromium 也行）：
 
-```powershell
-schtasks /run /tn chrome-arena     # Chrome 带 --remote-debugging-port=9222
-schtasks /run /tn arena-bridge     # 桥接服务
-curl.exe http://127.0.0.1:17892/health
+```bash
+node arena_bridge.js        # 桥自己会找 Chrome，没有就带 --remote-debugging-port=9222 拉起来
+curl http://127.0.0.1:17892/health
 ```
+
+第一次起来会是个空 profile，需要在这个 Chrome 窗口里登录 arena.ai 并切到 Agent 模式，之后就一直复用了。
+
+浏览器不在项目里，用系统装的那个。路径自动找（Windows 常见安装位置 / macOS 的 /Applications / Linux 的 PATH），找不到就用 `ARB_CHROME` 指定。跑在 SSH、计划任务这类没法直接弹窗的环境里时，用 `ARB_CHROME_CMD` 换成自己的启动命令。
 
 任意 OpenAI 兼容客户端：
 
@@ -75,6 +78,10 @@ arena doctor             # 隧道 / 桥接 / Chrome / 模型 体检
 | 变量 | 默认 | 作用 |
 |---|---|---|
 | `ARB_STATE_DIR` | `~/.arena-bridge` | 仓库缓存、调试转储的目录 |
+| `ARB_CHROME` | 自动探测 | 浏览器可执行文件路径；不设就按平台常见位置找 |
+| `ARB_CHROME_CMD` | 空 | 自定义启动命令（SSH / 计划任务场景），设了就不再自己 spawn |
+| `ARB_PROFILE` | `$ARB_STATE_DIR/chrome-profile` | 浏览器 profile 目录，登录态存在这里 |
+| `ARB_MINIMIZE_CMD` | 空 | 每轮结束后把窗口缩到后台的命令，不设就什么都不做 |
 | `ARB_MAX_SESSIONS` | `6` | 常驻标签页上限，超了按最久未用淘汰 |
 | `ARB_UPLOAD_ROOTS` | 空（不限制） | `/upload` 允许外发的目录白名单，`;`（Windows）或 `:` 分隔 |
 | `ARB_SSE_PING_MS` | `15000` | SSE 心跳间隔，防长任务被客户端判空闲 |

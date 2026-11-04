@@ -299,7 +299,7 @@ GET  /history?session=<name>
 | 需要人机验证（409 / `NEED_VERIFY`） | 需要人工过人机验证。已把 Chrome 切到前台……完成后自动重试一次 |
 | 队列满（429 / `busy: queue full`） | 桥的队列满了：最多同时 4 个任务，同一会话两次提问至少间隔 3 秒…… |
 | 鉴权失败（401/403） | 桥设了 `ARB_TOKEN`，客户端没带或对不上；用 `--token` 或 `ARENA_TOKEN` |
-| Chrome 没起（500 `chrome unavailable`） | Chrome 没在跑（9222 端口连不上）；`schtasks /run /tn chrome-arena` 或手动带 `--remote-debugging-port=9222` |
+| Chrome 没起（500 `chrome unavailable`） | 桥会自己找 Chrome 并拉起；起不来看桥日志里的中文提示——装个 Chrome/Edge，或用 `ARB_CHROME` 指定路径 |
 | 超时（408/504/读超时） | 等太久没动静……去 Chrome 看一眼标签页，Ctrl+C 可中断 |
 | 连不上桥 | 连不上桥 `127.0.0.1:17892`……先跑 `node bridge/arena_bridge.js` |
 | 其它 HTTP 错误 | `桥返回 HTTP <code>：<桥的原话>` + 一句该怎么办 |
