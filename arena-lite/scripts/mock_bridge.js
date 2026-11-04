@@ -82,6 +82,16 @@ http
           }),
         );
       }
+      if (u.pathname === '/repos') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            ok: true,
+            repo: 'owner/repo',
+            repos: ['owner/repo', 'other/thing'],
+          }),
+        );
+      }
       if (u.pathname === '/v1/chat/completions') {
         const parsed = JSON.parse(body || '{}');
         console.log('v1 msgs=' + (parsed.messages || []).length + ' mode=' +

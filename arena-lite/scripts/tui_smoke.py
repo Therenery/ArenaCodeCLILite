@@ -137,6 +137,21 @@ def main():
     out.clear()
     read_for(fd, 0.5, out)
 
+    # /repo 还没回车，仓库列表就该自己冒出来；↓ 选中后填进输入框
+    out.clear()
+    send(fd, "/repo")
+    read_for(fd, 1.5, out)
+    screen = strip_ansi("".join(out))
+    check("/repo 自动列出仓库", "owner/repo" in screen and "← 当前" in screen)
+    check("/repo 有确认提示", "Enter to confirm" in screen)
+    out.clear()
+    send(fd, "\x1b[B")
+    read_for(fd, 0.6, out)
+    screen = strip_ansi("".join(out))
+    check("/repo 下键把仓库填进输入框", "/repo other/thing" in screen)
+    send(fd, "\x1b")
+    read_for(fd, 0.4, out)
+
     # /resume 列出网页端会话，按编号打开
     out.clear()
     send(fd, "/resume\r")

@@ -29,6 +29,7 @@ pub enum Msg {
     /// 会话列表（名字 + 摘要 + 时间）
     SessionList(Vec<SessionInfo>),
     RepoList { current: String, list: Vec<String> },
+    RepoListFailed(String),
     /// 只更新「当前仓库」，不弹列表
     RepoCurrent(String),
     /// 网页端左侧栏的会话列表（/resume）

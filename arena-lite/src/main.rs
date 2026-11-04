@@ -32,7 +32,7 @@ use httpc::Base;
 use mode::Mode;
 use theme::{Palette, Theme};
 
-const VERSION: &str = "2.0.0";
+const VERSION: &str = "2.0.4";
 const DEFAULT_BASE: &str = "127.0.0.1:17892";
 
 /* ------------------------------ 参数 ------------------------------ */
@@ -840,6 +840,7 @@ fn handle_msg(app: &mut App, msg: Msg, out: &mut std::io::Stdout) {
         Msg::History(res) => app.on_history(res),
         Msg::SessionList(list) => app.on_session_list(list),
         Msg::RepoList { current, list } => app.on_repo_list(current, list),
+        Msg::RepoListFailed(why) => app.on_repo_list_failed(why),
         Msg::RepoCurrent(cur) => app.on_repo_current(cur),
         Msg::ConversationList(list) => app.on_conversation_list(list),
         Msg::Notice(text) => app.notice(text),

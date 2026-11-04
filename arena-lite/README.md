@@ -45,7 +45,7 @@ bash scripts/check.sh        # 编 release + 跑全部单测 + 顺手做一次 W
 | 项 | 状态 |
 | --- | --- |
 | 宿主（x86_64-unknown-linux-gnu）`rustc 1.88.0` 编译 | ✅ 通过，**零警告** |
-| 单元测试 | ✅ **122 个全过**（见第 9 节） |
+| 单元测试 | ✅ **132 个全过**（见第 9 节） |
 | `--target x86_64-pc-windows-gnu` 完整编译（`--emit=obj`，含全部 `cfg(windows)` 分支） | ✅ 通过，零警告，产出 COFF 目标文件 |
 | 链接出 `arena-lite.exe` | ❌ 沙箱里**没做到**：缺 mingw 导入库（`libkernel32.a`/`libuser32.a` 等），而这台机器只允许访问 npm/pypi/github 镜像，拿不到 mingw-w64 工具链。代码没问题（编译到目标文件那一步已经过了），是链接器找不到系统库 |
 | `cargo` | ❌ 沙箱里没有 cargo，也没有 crates.io 网络；本 crate 零依赖，所以用 `rustc` 直编等价 |
@@ -164,7 +164,20 @@ battle / side / direct 模式不显示这一行。
   Enter to confirm · Esc to cancel
 ```
 
-`/resume`、`/sessions`、`/repo` 都是同一套：↑↓ 选、Enter 确认、Esc 取消。
+`/resume`、`/sessions` 是弹出式选择器：↑↓ 选、Enter 确认、Esc 取消。
+
+`/repo` 更省一步——敲到 `/repo` 的那一刻就去拉仓库名，不用回车，列表直接从输入框上面冒出来，当前仓库带 `← 当前`：
+
+```
+❯ owner/repo  ← 当前
+  other/thing
+──────────────────────────────────────────────
+❯ /repo
+──────────────────────────────────────────────
+  Enter to confirm · Esc to cancel
+```
+
+↑↓ 选中的名字立刻填进输入框，再按回车才真正切过去。手打 `/repo other/th` 时方向键还给光标，不会抢。
 
 | 键 | 行为 |
 | --- | --- |
@@ -198,7 +211,7 @@ battle / side / direct 模式不显示这一行。
 | `/sessions` | 列出桥当前的标签页（调试用，不载入） |
 | `/new` | 清空服务端会话（`GET /new`） |
 | `/health` | 体检桥（`GET /health`） |
-| `/repo` | 列出所有仓库，↑↓ 选、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
+| `/repo` | 边打边列仓库：输入框上方直接出列表，↑↓ 选、选中即填入、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
 | `/vote a\|b\|tie\|both` | 对战投票（`POST /vote`） |
 | `/upload <路径[,路径]>` | 上传文件到当前会话（`POST /upload`） |
 | `/reasoning` `/tools` | 展开/折叠思考链 / 工具块 |
@@ -297,7 +310,7 @@ GET  /history?session=<name>
 
 ## 9. 测试
 
-### 单元测试：128 个，`cargo test` 或 `bash scripts/check.sh`
+### 单元测试：132 个，`cargo test` 或 `bash scripts/check.sh`
 
 覆盖要求里点名的四类，且每类都不是走过场：
 

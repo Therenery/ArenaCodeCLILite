@@ -471,6 +471,43 @@ fn list_rows(app: &App, w: usize, th: &Theme) -> Vec<String> {
         return out;
     }
 
+    // 输入框里写着 /repo：下面直接列仓库，上下键选
+    if app.repo_mode() {
+        if app.repo_list.is_empty() {
+            let msg = if app.repo_loading {
+                "正在读仓库列表…"
+            } else {
+                "还没有仓库，/repo owner/name 手动切"
+            };
+            out.push(format!("  {}", th.dim(msg)));
+            return out;
+        }
+        let sel = app.suggest_sel.min(app.repo_list.len() - 1);
+        let (start, end) = window(app.repo_list.len(), sel, LIST_MAX);
+        for i in start..end {
+            let name = &app.repo_list[i];
+            let cur = *name == app.repo;
+            let mark = if i == sel { "❯ " } else { "  " };
+            let text = if cur {
+                format!("{}  ← 当前", name)
+            } else {
+                name.clone()
+            };
+            let text = fit(&text, w.saturating_sub(2));
+            let mut row = Row::new();
+            row.push(th, mark, Some(Palette::Accent), true);
+            if i == sel {
+                row.push(th, &text, Some(Palette::User), true);
+            } else if cur {
+                row.push(th, &text, Some(Palette::Accent), false);
+            } else {
+                row.push(th, &text, Some(Palette::Dim), false);
+            }
+            out.push(row.styled);
+        }
+        return out;
+    }
+
     let sug = app.suggestions();
     if sug.is_empty() {
         return out;
@@ -509,7 +546,7 @@ fn window(len: usize, sel: usize, max: usize) -> (usize, usize) {
 
 fn hint_row(app: &App, w: usize, th: &Theme) -> Row {
     let mut row = Row::new();
-    if app.picker.is_some() || !app.suggestions().is_empty() {
+    if app.picker.is_some() || app.repo_mode() || !app.suggestions().is_empty() {
         row.push(th, "  Enter to confirm · Esc to cancel", Some(Palette::Dim), false);
         return row;
     }
@@ -921,7 +958,7 @@ mod tests {
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
         assert!(joined.contains("Arena Code"), "缺少标题");
-        assert!(joined.contains("v2.0.0"), "缺少版本号");
+        assert!(joined.contains("v2.0.4"), "缺少版本号");
         assert!(joined.contains("agent · arena-agent"), "缺少模式·模型");
         assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
         assert!(!joined.contains('┌'), "不该再画框了");
@@ -1018,6 +1055,33 @@ mod tests {
             .position(|l| l.trim_end() == "❯ /re")
             .expect("找不到输入行");
         assert!(sel < input, "候选应该在输入框上面");
+    }
+
+    #[test]
+    fn repo_list_shows_above_input_and_marks_current() {
+        let mut a = app(Mode::Agent);
+        a.input = "/repo".to_string();
+        a.cursor = 5;
+        a.on_repo_list(
+            "a/b".to_string(),
+            vec!["a/b".to_string(), "c/d".to_string()],
+        );
+        let th = Theme::new(false);
+        let rows = render_rows(&mut a, Size { cols: 100, rows: 30 }, &th);
+        let plain: Vec<String> = rows.iter().map(|r| strip_ansi(r)).collect();
+        let text = plain.join("\n");
+        assert!(text.contains("a/b  ← 当前"), "没标出当前仓库");
+        assert!(text.contains("c/d"), "没列出候选仓库");
+        let first = plain
+            .iter()
+            .position(|l| l.contains("a/b  ← 当前"))
+            .expect("找不到当前仓库那一行");
+        let input = plain
+            .iter()
+            .position(|l| l.trim_end() == "❯ /repo")
+            .expect("找不到输入行");
+        assert!(first < input, "仓库列表应该在输入框上面");
+        assert!(text.contains("Enter to confirm"), "底部没提示按键");
     }
 
     #[test]

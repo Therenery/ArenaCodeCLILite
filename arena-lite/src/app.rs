@@ -81,7 +81,6 @@ pub struct Picker {
 pub enum PickKind {
     Conversation,
     Session,
-    Repo,
 }
 
 impl Picker {
@@ -156,6 +155,9 @@ pub struct App {
     pub suggest_sel: usize,
     /// 当前仓库（agent 模式下常驻显示在顶部）
     pub repo: String,
+    /// 打到 /repo 时预加载的仓库名，用上下键选
+    pub repo_list: Vec<String>,
+    pub repo_loading: bool,
 }
 
 impl App {
@@ -190,6 +192,8 @@ impl App {
             picker: None,
             suggest_sel: 0,
             repo: String::new(),
+            repo_list: Vec::new(),
+            repo_loading: false,
         }
     }
 
@@ -441,6 +445,13 @@ impl App {
             self.notice("正在生成，先 Ctrl+C 中断再发");
             return;
         }
+        // /repo 的候选：光敲了 /repo 就回车，切到高亮那个
+        if self.input.trim() == "/repo" && !self.repo_list.is_empty() {
+            let i = self.suggest_sel.min(self.repo_list.len() - 1);
+            let name = self.repo_list[i].clone();
+            self.set_input(format!("/repo {}", name));
+        }
+
         // 命令补全列表开着的时候，回车 = 执行高亮的那条
         let sug = self.suggestions();
         if !sug.is_empty() {
@@ -695,12 +706,36 @@ impl App {
                 self.cfg.session = value.clone();
                 self.notice(format!("会话已切到 {}", value));
             }
-            PickKind::Repo => self.switch_repo(&value),
         }
     }
 
-    /// 读桥上的仓库列表，弹成选择列表
-    pub fn list_repos(&mut self) {
+    /// 输入框里是不是正在写 /repo
+    pub fn repo_mode(&self) -> bool {
+        let t = self.input.trim_start();
+        t == "/repo" || t.starts_with("/repo ")
+    }
+
+    /// 输入框里是不是「/repo」或者「/repo <列表里的某个仓库>」——只有这两种情况才让上下键接管
+    pub fn repo_picking(&self) -> bool {
+        if self.repo_list.is_empty() {
+            return false;
+        }
+        let t = self.input.trim();
+        if t == "/repo" {
+            return true;
+        }
+        match t.strip_prefix("/repo ") {
+            Some(name) => self.repo_list.iter().any(|r| r == name),
+            None => false,
+        }
+    }
+
+    /// 读到 /repo 就把仓库名先拉下来，不用等回车
+    pub fn maybe_load_repos(&mut self) {
+        if !self.repo_mode() || self.repo_loading || !self.repo_list.is_empty() {
+            return;
+        }
+        self.repo_loading = true;
         let client = Arc::clone(&self.client);
         let tx = self.tx.clone();
         std::thread::spawn(move || match client.repos() {
@@ -708,27 +743,34 @@ impl App {
                 let _ = tx.send(Msg::RepoList { current, list });
             }
             Err(e) => {
-                let _ = tx.send(Msg::Notice(format!("读仓库列表失败：{}", e.short())));
+                let _ = tx.send(Msg::RepoListFailed(e.short().to_string()));
             }
         });
     }
 
+    pub fn on_repo_list_failed(&mut self, why: String) {
+        self.repo_loading = false;
+        self.notice(format!("读仓库列表失败：{}", why));
+    }
+
     pub fn on_repo_list(&mut self, current: String, list: Vec<String>) {
+        self.repo_loading = false;
         self.repo = current.clone();
-        if list.is_empty() {
-            self.push_system("桥上还没有配置仓库（先 /repo <owner/name>）");
-            return;
-        }
-        let rows: Vec<(String, String)> = list
+        self.repo_list = list;
+        self.suggest_sel = self
+            .repo_list
             .iter()
-            .map(|r| {
-                let mark = if *r == current { "  ← 当前" } else { "" };
-                (format!("{}{}", r, mark), r.clone())
-            })
-            .collect();
-        self.picker = Some(Picker::new(PickKind::Repo, "仓库", rows));
-        self.notice("↑↓ 选仓库，Enter 切过去，Esc 取消");
+            .position(|r| *r == current)
+            .unwrap_or(0);
         self.dirty = true;
+    }
+
+    /// 把高亮的那条仓库填进输入框
+    pub fn fill_repo(&mut self, idx: usize) {
+        if let Some(name) = self.repo_list.get(idx).cloned() {
+            self.set_input(format!("/repo {}", name));
+            self.suggest_sel = idx;
+        }
     }
 
     /// 切仓库（等于开新对话）
@@ -890,7 +932,8 @@ impl App {
             "/health" => self.fetch_health(),
             "/repo" | "/repos" => {
                 if rest.is_empty() {
-                    self.list_repos();
+                    self.maybe_load_repos();
+                    self.notice("正在读仓库列表…");
                 } else {
                     self.switch_repo(&rest);
                 }
@@ -1196,6 +1239,42 @@ impl App {
     /* ------------------------------ 主循环入口 ------------------------------ */
 
     pub fn handle_key(&mut self, k: Key) {
+        self.handle_key_inner(k);
+        // 按键处理完再看一眼：可能刚把 /repo 打完，这就去拉仓库名
+        self.maybe_load_repos();
+    }
+
+    fn handle_key_inner(&mut self, k: Key) {
+        // 仓库候选：上下键直接填进输入框
+        if self.repo_picking() {
+            let n = self.repo_list.len();
+            match k {
+                Key::Up => {
+                    let i = self.suggest_sel.saturating_sub(1);
+                    self.fill_repo(i);
+                    self.dirty = true;
+                    return;
+                }
+                Key::Down => {
+                    let i = (self.suggest_sel + 1).min(n - 1);
+                    self.fill_repo(i);
+                    self.dirty = true;
+                    return;
+                }
+                Key::Tab => {
+                    let i = self.suggest_sel.min(n - 1);
+                    self.fill_repo(i);
+                    return;
+                }
+                Key::Esc => {
+                    self.clear_input();
+                    self.suggest_sel = 0;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // 选择列表优先吃掉按键
         if self.picker.is_some() {
             let mut pick: Option<Option<(PickKind, String)>> = None;
@@ -1553,17 +1632,34 @@ mod tests {
     }
 
     #[test]
-    fn repo_list_becomes_picker_and_marks_current() {
+    fn repo_list_highlights_current_and_arrows_fill_input() {
         let mut app = dummy_app(Mode::Agent);
+        app.set_input("/repo".to_string());
         app.on_repo_list(
             "a/b".to_string(),
             vec!["a/b".to_string(), "c/d".to_string()],
         );
         assert_eq!(app.repo, "a/b");
-        let p = app.picker.as_ref().expect("没弹列表");
-        assert_eq!(p.items.len(), 2);
-        assert_eq!(p.items[0], "a/b  ← 当前");
-        assert_eq!(p.items[1], "c/d");
+        assert!(app.picker.is_none(), "仓库不该再弹选择器");
+        assert_eq!(app.suggest_sel, 0, "光标应停在当前仓库");
+
+        // ↓ 选中第二项，直接填进输入框；↑ 再回到第一项
+        app.handle_key(Key::Down);
+        assert_eq!(app.input, "/repo c/d");
+        app.handle_key(Key::Up);
+        assert_eq!(app.input, "/repo a/b");
+    }
+
+    #[test]
+    fn repo_arrows_only_take_over_for_bare_or_listed_repo() {
+        let mut app = dummy_app(Mode::Agent);
+        app.on_repo_list("a/b".to_string(), vec!["a/b".to_string(), "c/d".to_string()]);
+        app.set_input("/repo".to_string());
+        assert!(app.repo_picking(), "裸 /repo 该接管方向键");
+        app.set_input("/repo c/d".to_string());
+        assert!(app.repo_picking(), "选过的仓库该继续接管");
+        app.set_input("/repo ow".to_string());
+        assert!(!app.repo_picking(), "手打仓库名时方向键该正常移动光标");
     }
 
     #[test]
