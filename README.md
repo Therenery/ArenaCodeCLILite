@@ -22,9 +22,8 @@ arena ❯ 好的，我先看一下目录树……
 | 路径 | 作用 |
 |---|---|
 | `arena-lite/` | Rust 客户端源码，18 个源文件，`Cargo.toml` 的 `[dependencies]` 为空 |
-| `bridge/` | 配套的 Node 桥，监听 `127.0.0.1:17892`，同样无第三方依赖 |
 
-桥放在这里是为了克隆下来就能跑；它和 [ArenaCodeCLI-Simplify](https://github.com/Therenery/ArenaCodeCLI-Simplify) 里的那份是同一个。
+桥不在这个仓库里，正本在 [arena-bridge](https://github.com/Therenery/arena-bridge)（`node arena_bridge.js`，监听 `127.0.0.1:17892`，同样零第三方依赖）。
 
 ## 编译
 
@@ -43,8 +42,9 @@ bash scripts/check.sh        # 编 release + 跑全部单测 + 顺手做一次 W
 ## 跑起来
 
 ```cmd
-rem 1. 起桥（会自己找 Chrome，带 --remote-debugging-port=9222 拉起来）
-cd bridge
+rem 1. 起桥（在 arena-bridge 仓库里；会自己找 Chrome，带 --remote-debugging-port=9222 拉起来）
+git clone https://github.com/Therenery/arena-bridge
+cd arena-bridge
 node arena_bridge.js
 
 rem 2. 第一次：在弹出的窗口里登录 arena.ai，切到 Agent 模式（之后一直复用这个 profile）
@@ -70,4 +70,4 @@ arena-lite
 
 ## 相关
 
-- [ArenaCodeCLI-Simplify](https://github.com/Therenery/ArenaCodeCLI-Simplify) — 同一套桥的 Qwen Code 改造版 CLI
+- [arena-bridge](https://github.com/Therenery/arena-bridge) — 配套的 Node 桥（正本）
