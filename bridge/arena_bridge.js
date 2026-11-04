@@ -959,7 +959,10 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/repos' || u.pathname === '/repo') {
     const rn = u.searchParams.get('session') || 'main';
     const want = u.searchParams.get('name') || '';
-    if (u.searchParams.get('cached')) return send(200, { repo: repoCache.repo, repos: repoCache.repos, cached: true });
+    // cached=0 / false 不能当缓存：'0' 在 JS 里是真值，会把切换请求吞掉
+    const cachedFlag = u.searchParams.get('cached');
+    if (cachedFlag && cachedFlag !== '0' && cachedFlag !== 'false')
+      return send(200, { repo: repoCache.repo, repos: repoCache.repos, cached: true });
     const doRepo = async () => {
       const s = await getSession(rn, { mode: 'agent' });
       await sleep(2500);

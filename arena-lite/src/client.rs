@@ -231,10 +231,8 @@ impl Client {
 
     /// 切仓库（等于开新对话）
     pub fn switch_repo(&self, name: &str, session: &str) -> Result<String, BridgeError> {
-        let path = urlenc::with_query(
-            "/repo",
-            &[("session", session), ("name", name), ("cached", "0")],
-        );
+        // 不带 cached：带任何值桥都会当成「只读缓存」，根本不会去切
+        let path = urlenc::with_query("/repo", &[("session", session), ("name", name)]);
         let mut resp = self.call(Request::new("GET", &path).read_timeout(Duration::from_secs(240)))?;
         let text = resp
             .read_text(1024 * 1024)

@@ -89,6 +89,7 @@ impl Theme {
     }
 
     /// 直接给一个 SGR 参数（例如反显光标）
+    #[allow(dead_code)]
     pub fn raw(&self, sgr: &str, text: &str) -> String {
         if !self.enabled || text.is_empty() {
             return text.to_string();

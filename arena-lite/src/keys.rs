@@ -21,7 +21,12 @@ pub enum Key {
     Esc,
     /// Ctrl + 字母（小写）
     Ctrl(char),
-    /// 能识别是按键，但不需要处理（F 键、鼠标、Insert 等）
+    /// 鼠标滚轮（一次一格，调用方自己决定滚几行）
+    WheelUp,
+    WheelDown,
+    /// 鼠标左键按下，屏幕坐标 0 基
+    MouseDown { x: usize, y: usize },
+    /// 能识别是按键，但不需要处理（F 键、Insert 等）
     Ignored,
 }
 
@@ -185,6 +190,24 @@ fn parse_escape(b: &[u8]) -> Step {
 #[cfg(unix)]
 fn csi_key(params: &[u8], fin: u8) -> Key {
     let text = String::from_utf8_lossy(params).to_string();
+    // SGR 鼠标：CSI < b ; x ; y M/m
+    if (fin == b'M' || fin == b'm') && text.starts_with('<') {
+        let parts: Vec<&str> = text[1..].split(';').collect();
+        if parts.len() == 3 {
+            let btn = parts[0].parse::<u32>().unwrap_or(0);
+            let x = parts[1].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            let y = parts[2].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            if fin == b'M' {
+                match btn {
+                    64 => return Key::WheelUp,
+                    65 => return Key::WheelDown,
+                    0 => return Key::MouseDown { x, y },
+                    _ => return Key::Ignored,
+                }
+            }
+        }
+        return Key::Ignored;
+    }
     // CSI-u（Windows Terminal / kitty 的扩展）：13;2u 是 Shift+Enter，13;3u 是 Alt+Enter
     if fin == b'u' {
         let mut it = text.split(';');

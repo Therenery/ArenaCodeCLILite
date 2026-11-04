@@ -23,6 +23,7 @@ const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
 const ENABLE_LINE_INPUT: u32 = 0x0002;
 const ENABLE_ECHO_INPUT: u32 = 0x0004;
 const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+const ENABLE_MOUSE_INPUT: u32 = 0x0010;
 const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
 
 const ENABLE_PROCESSED_OUTPUT: u32 = 0x0001;
@@ -31,6 +32,9 @@ const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
 const CP_UTF8: u32 = 65001;
 
 const KEY_EVENT: u32 = 0x0001;
+const MOUSE_EVENT: u32 = 0x0002;
+const MOUSE_WHEELED: u32 = 0x0004;
+const FROM_LEFT_1ST_BUTTON_PRESSED: u32 = 0x0001;
 
 /* ---------- 控制台按键修饰位 ---------- */
 const RIGHT_ALT_PRESSED: u32 = 0x0001;
@@ -178,7 +182,8 @@ pub fn enter_raw() -> Option<RawMode> {
         if GetConsoleMode(hout, &mut out_mode) == 0 {
             return None;
         }
-        let want_in = (in_mode | ENABLE_EXTENDED_FLAGS)
+        // 开鼠标输入：滚轮和点击要靠它；代价是选字要按住 Shift
+        let want_in = (in_mode | ENABLE_EXTENDED_FLAGS | ENABLE_MOUSE_INPUT)
             & !(ENABLE_LINE_INPUT
                 | ENABLE_ECHO_INPUT
                 | ENABLE_PROCESSED_INPUT
@@ -214,8 +219,16 @@ pub fn spawn_input(tx: Sender<Msg>) {
                     std::thread::sleep(Duration::from_millis(40));
                     continue;
                 }
+                if rec.event_type == MOUSE_EVENT {
+                    if let Some(k) = decode_mouse(&rec.body) {
+                        if tx.send(Msg::Key(k)).is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
                 if rec.event_type != KEY_EVENT {
-                    continue; // 窗口尺寸/鼠标事件交给轮询处理
+                    continue; // 窗口尺寸事件忽略
                 }
                 for k in decode_key(&rec.body) {
                     if tx.send(Msg::Key(k)).is_err() {
@@ -236,6 +249,29 @@ fn u32_at(b: &[u8; 16], off: usize) -> u32 {
     let mut tmp = [0u8; 4];
     tmp.copy_from_slice(&b[off..off + 4]);
     u32::from_ne_bytes(tmp)
+}
+
+/// MOUSE_EVENT_RECORD → 滚轮或左键点击
+///
+/// 布局：x(i16) y(i16) buttonState(u32) controlKeyState(u32) eventFlags(u32)
+fn decode_mouse(body: &[u8; 16]) -> Option<Key> {
+    let x = u16_at(body, 0) as usize;
+    let y = u16_at(body, 2) as usize;
+    let buttons = u32_at(body, 4);
+    let flags = u32_at(body, 12);
+    if flags == MOUSE_WHEELED {
+        let delta = (buttons >> 16) as u16 as i16;
+        return if delta > 0 {
+            Some(Key::WheelUp)
+        } else {
+            Some(Key::WheelDown)
+        };
+    }
+    // 只认左键按下那一刻，移动和抬起都不管
+    if flags == 0 && buttons & FROM_LEFT_1ST_BUTTON_PRESSED != 0 {
+        return Some(Key::MouseDown { x, y });
+    }
+    None
 }
 
 /// KEY_EVENT_RECORD → 一个或多个 Key（长按重复用 repeat count 展开）

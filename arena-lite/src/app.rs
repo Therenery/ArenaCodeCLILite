@@ -32,6 +32,8 @@ pub enum Block {
     Tool {
         name: String,
         input: String,
+        /// 这一块是否展开（工具阶段默认展开正在跑的那个）
+        open: bool,
     },
     System {
         text: String,
@@ -134,7 +136,12 @@ pub struct App {
     pub view_h: usize,
 
     pub show_reasoning: bool,
-    pub show_tools: bool,
+    /// 这一帧输入光标该落在屏幕哪一行哪一列（1 基），None 表示不显示
+    pub cursor_at: Option<(usize, usize)>,
+    /// 对话区第一行在屏幕上的行号（0 基），点击命中测试用
+    pub hit_top: usize,
+    /// 对话区每一行对应的块下标（只有工具块的标题行有值）
+    pub hit_rows: Vec<Option<usize>>,
 
     pub health: HealthState,
     pub stream: Option<StreamState>,
@@ -178,7 +185,9 @@ impl App {
             follow: true,
             view_h: 10,
             show_reasoning,
-            show_tools: false,
+            cursor_at: None,
+            hit_top: 0,
+            hit_rows: Vec::new(),
             health: HealthState::Unknown,
             stream: None,
             notice: None,
@@ -265,13 +274,29 @@ impl App {
     }
 
     fn touch_tool(&mut self, name: String, input: String) {
-        self.blocks.push(Block::Tool { name, input });
+        // 工具阶段：正在跑的这个展开，前面的收起来，别把屏幕撑爆
+        for b in self.blocks.iter_mut() {
+            if let Block::Tool { open, .. } = b {
+                *open = false;
+            }
+        }
+        self.blocks.push(Block::Tool {
+            name,
+            input,
+            open: true,
+        });
     }
 
     fn append_text(&mut self, text: &str) {
         if let Some(Block::Assistant { text: t }) = self.blocks.last_mut() {
             t.push_str(text);
             return;
+        }
+        // 正文开始写了，说明工具阶段结束，把展开的工具块收起来
+        for b in self.blocks.iter_mut() {
+            if let Block::Tool { open, .. } = b {
+                *open = false;
+            }
         }
         self.blocks.push(Block::Assistant {
             text: text.to_string(),
@@ -420,6 +445,49 @@ impl App {
             self.follow = false;
         }
         self.dirty = true;
+    }
+
+    /// 滚轮：按行滚动
+    pub fn scroll_lines(&mut self, up: bool, n: usize) {
+        if up {
+            self.scroll_top = self.scroll_top.saturating_sub(n);
+        } else {
+            self.scroll_top = self.scroll_top.saturating_add(n);
+        }
+        self.follow = false;
+        self.dirty = true;
+    }
+
+    /// 全部展开 / 全部收起，返回展开后的状态
+    pub fn toggle_all_tools(&mut self) -> bool {
+        let any_open = self
+            .blocks
+            .iter()
+            .any(|b| matches!(b, Block::Tool { open: true, .. }));
+        for b in self.blocks.iter_mut() {
+            if let Block::Tool { open, .. } = b {
+                *open = !any_open;
+            }
+        }
+        self.dirty = true;
+        !any_open
+    }
+
+    /// 点了屏幕某一行：命中工具块标题就切换展开
+    pub fn click_row(&mut self, y: usize) -> bool {
+        if y < self.hit_top {
+            return false;
+        }
+        let block = match self.hit_rows.get(y - self.hit_top) {
+            Some(Some(b)) => *b,
+            _ => return false,
+        };
+        if let Some(Block::Tool { open, .. }) = self.blocks.get_mut(block) {
+            *open = !*open;
+            self.dirty = true;
+            return true;
+        }
+        false
     }
 
     /// 渲染时把「顶行」校准：到底了就恢复跟随
@@ -782,7 +850,7 @@ impl App {
         self.blocks.clear();
         self.log.clear();
         self.repo = name.clone();
-        self.push_system(format!("正在切到仓库 {} …（这等于开新对话）", name));
+        self.push_system(format!("正在切到仓库 {} …", name));
         std::thread::spawn(move || match client.switch_repo(&name, &session) {
             Ok(_) => {
                 let _ = tx.send(Msg::Notice(format!("已切到 {}", name)));
@@ -988,8 +1056,8 @@ impl App {
                 });
             }
             "/tools" => {
-                self.show_tools = !self.show_tools;
-                self.notice(if self.show_tools {
+                let open = self.toggle_all_tools();
+                self.notice(if open {
                     "工具块已展开"
                 } else {
                     "工具块已折叠"
@@ -1352,7 +1420,7 @@ impl App {
                 self.dirty = true;
             }
             Key::Ctrl('t') => {
-                self.show_tools = !self.show_tools;
+                self.toggle_all_tools();
                 self.dirty = true;
             }
             Key::Ctrl('l') => {
@@ -1363,6 +1431,11 @@ impl App {
             Key::Ctrl('d') => self.quit = true,
             Key::PageUp => self.scroll_page(true),
             Key::PageDown => self.scroll_page(false),
+            Key::WheelUp => self.scroll_lines(true, 3),
+            Key::WheelDown => self.scroll_lines(false, 3),
+            Key::MouseDown { y, .. } => {
+                self.click_row(y);
+            }
             Key::Enter => self.submit(),
             Key::Newline | Key::Ctrl('j') => self.insert_char('\n'),
             Key::Backspace => self.delete_back(),
@@ -1660,6 +1733,60 @@ mod tests {
         assert!(app.repo_picking(), "选过的仓库该继续接管");
         app.set_input("/repo ow".to_string());
         assert!(!app.repo_picking(), "手打仓库名时方向键该正常移动光标");
+    }
+
+    #[test]
+    fn wheel_scrolls_three_lines() {
+        let mut app = dummy_app(Mode::Agent);
+        app.view_h = 10;
+        app.scroll_top = 20;
+        app.follow = false;
+        app.handle_key(Key::WheelUp);
+        assert_eq!(app.scroll_top, 17);
+        app.handle_key(Key::WheelDown);
+        assert_eq!(app.scroll_top, 20);
+    }
+
+    #[test]
+    fn running_tool_block_is_open_and_earlier_ones_collapse() {
+        let mut app = dummy_app(Mode::Agent);
+        app.touch_tool("read_file".to_string(), "{}".to_string());
+        assert!(matches!(
+            app.blocks.last(),
+            Some(Block::Tool { open: true, .. })
+        ));
+        app.touch_tool("write_file".to_string(), "{}".to_string());
+        let opens: Vec<bool> = app
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Tool { open, .. } => Some(*open),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opens, vec![false, true], "新工具展开，旧的收起");
+
+        app.append_text("好了");
+        let opens: Vec<bool> = app
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Tool { open, .. } => Some(*open),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(opens, vec![false, false], "正文开始后工具块全收起");
+    }
+
+    #[test]
+    fn clicking_tool_header_toggles_it() {
+        let mut app = dummy_app(Mode::Agent);
+        app.touch_tool("read_file".to_string(), "{}".to_string());
+        app.hit_top = 3;
+        app.hit_rows = vec![None, Some(0)];
+        assert!(app.click_row(4), "点在工具标题上应该命中");
+        assert!(matches!(app.blocks[0], Block::Tool { open: false, .. }));
+        assert!(!app.click_row(3), "点在别的行上不该有反应");
     }
 
     #[test]

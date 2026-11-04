@@ -16,6 +16,8 @@ struct Line {
     text: String,
     pal: Option<Palette>,
     bold: bool,
+    /// 这一行属于哪个块（只有工具块标题行填，点击命中用）
+    block: Option<usize>,
 }
 
 impl Line {
@@ -24,11 +26,17 @@ impl Line {
             text: text.into(),
             pal,
             bold: false,
+            block: None,
         }
     }
 
     fn bold(mut self) -> Line {
         self.bold = true;
+        self
+    }
+
+    fn with_block(mut self, i: usize) -> Line {
+        self.block = Some(i);
         self
     }
 }
@@ -89,7 +97,14 @@ pub fn render(app: &mut App, size: Size, th: &Theme) -> String {
         out.push_str(theme::CLEAR_LINE);
         out.push_str(row);
     }
-    out.push_str(theme::CURSOR_SHOW);
+    // 把硬件光标放到输入位置，用它当光标；拿不到位置就藏起来
+    match app.cursor_at {
+        Some((r, c)) => {
+            out.push_str(&theme::goto(r as u16 + 1, c as u16));
+            out.push_str(theme::CURSOR_SHOW);
+        }
+        None => out.push_str(theme::CURSOR_HIDE),
+    }
     out
 }
 
@@ -140,14 +155,20 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     app.anchor(total);
     let top = app.scroll_top.min(total.saturating_sub(chat_h));
     let mut chat_rows: Vec<Row> = Vec::with_capacity(chat_h);
+    let mut hit_rows: Vec<Option<usize>> = Vec::with_capacity(chat_h);
     for i in 0..chat_h {
         let idx = top + i;
         let mut row = Row::new();
         if let Some(line) = lines.get(idx) {
             row.push(th, &line.text, line.pal, line.bold);
+            hit_rows.push(line.block);
+        } else {
+            hit_rows.push(None);
         }
         chat_rows.push(row);
     }
+    app.hit_top = header_h;
+    app.hit_rows = hit_rows;
     // 右下角「新内容」提示
     if !app.follow && chat_h > 0 && total > chat_h {
         let tip = "↓ 新内容";
@@ -169,9 +190,12 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     for row in chat_rows {
         rows.push(row.styled);
     }
-    for row in input_rows(app, w, input_h, th) {
+    let input_top = rows.len();
+    let (input_block, cur) = input_rows(app, w, input_h, th);
+    for row in input_block {
         rows.push(row);
     }
+    app.cursor_at = cur.map(|(r, c)| (input_top + r, c));
     // 候选列表挂在输入框下面，视线跟着光标走
     rows.extend(list);
     rows.push(hint_row(app, w, th).styled);
@@ -572,7 +596,13 @@ fn hint_row(app: &App, w: usize, th: &Theme) -> Row {
 
 /* ------------------------------ 输入区 ------------------------------ */
 
-fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String> {
+/// 返回（输入框那几行, 光标落在框内第几行第几列）
+fn input_rows(
+    app: &mut App,
+    w: usize,
+    input_h: usize,
+    th: &Theme,
+) -> (Vec<String>, Option<(usize, usize)>) {
     let avail = w.saturating_sub(2).max(4);
     let mut out: Vec<String> = Vec::with_capacity(input_h + 2);
     out.push(th.dim(&repeat('─', w)));
@@ -589,6 +619,7 @@ fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String
     let cursor_line = cursor_line_index(&app.input, app.cursor, avail);
     let cursor_col = cursor_width(&app.input, app.cursor, avail);
 
+    let mut cur_pos: Option<(usize, usize)> = None;
     for i in 0..input_h {
         let idx = start + i;
         let mut row = Row::new();
@@ -600,52 +631,19 @@ fn input_rows(app: &mut App, w: usize, input_h: usize, th: &Theme) -> Vec<String
         if app.input.is_empty() {
             if i == 0 {
                 row.push(th, "输入消息…", Some(Palette::Dim), false);
+                cur_pos = Some((1 + i, 3));
             }
         } else if let Some(text) = lines.get(idx) {
-            let styled = if idx == cursor_line && cursor_col <= str_width(text) {
-                with_cursor(text, cursor_col, th)
-            } else {
-                th.paint(&crate::width::sanitize(text), Palette::User)
-            };
-            row.width += str_width(text);
-            row.styled.push_str(&styled);
+            row.push(th, &crate::width::sanitize(text), Some(Palette::User), false);
+            if idx == cursor_line {
+                // 光标落在这一行：列号 = 前缀 2 + 显示宽度，1 基
+                cur_pos = Some((1 + i, 3 + cursor_col.min(avail.saturating_sub(1))));
+            }
         }
         out.push(row.styled);
     }
     out.push(th.dim(&repeat('─', w)));
-    out
-}
-
-/// 在字符位置画出反显光标
-fn with_cursor(line: &str, col: usize, th: &Theme) -> String {
-    let chars: Vec<char> = line.chars().collect();
-    // col 是显示宽度，转成字符索引
-    let mut w = 0usize;
-    let mut idx = chars.len();
-    for (i, ch) in chars.iter().enumerate() {
-        if w >= col {
-            idx = i;
-            break;
-        }
-        w += crate::width::char_width(*ch);
-    }
-    let before: String = chars[..idx.min(chars.len())].iter().collect();
-    let at = if idx < chars.len() {
-        chars[idx].to_string()
-    } else {
-        " ".to_string()
-    };
-    let after: String = if idx + 1 <= chars.len() {
-        chars[(idx + 1).min(chars.len())..].iter().collect()
-    } else {
-        String::new()
-    };
-    format!(
-        "{}{}{}",
-        th.paint(&before, Palette::User),
-        th.raw("7", &at),
-        th.paint(&after, Palette::User)
-    )
+    (out, cur_pos)
 }
 
 fn cursor_line_index(input: &str, cursor: usize, avail: usize) -> usize {
@@ -688,7 +686,7 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
         return out;
     }
 
-    for b in app.blocks.iter() {
+    for (bi, b) in app.blocks.iter().enumerate() {
         match b {
             Block::User { text } => {
                 push_prefixed(
@@ -734,12 +732,13 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
                     ));
                 }
             }
-            Block::Tool { name, input } => {
+            Block::Tool { name, input, open } => {
                 let summary = tool_summary(input);
-                if app.show_tools {
+                if *open {
                     out.push(
                         Line::new(format!("▾ 工具 {}  {}", name, summary), Some(Palette::Tool))
-                            .bold(),
+                            .bold()
+                            .with_block(bi),
                     );
                     if !input.trim().is_empty() {
                         for l in wrap(&pretty_json(input), w.saturating_sub(6).max(8)) {
@@ -747,10 +746,10 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
                         }
                     }
                 } else {
-                    out.push(Line::new(
-                        format!("▸ 工具 {}  {}", name, summary),
-                        Some(Palette::Tool),
-                    ));
+                    out.push(
+                        Line::new(format!("▸ 工具 {}  {}", name, summary), Some(Palette::Tool))
+                            .with_block(bi),
+                    );
                 }
             }
             Block::System { text } => {
@@ -959,7 +958,7 @@ mod tests {
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
         assert!(joined.contains("Arena Code"), "缺少标题");
-        assert!(joined.contains("v2.0.4"), "缺少版本号");
+        assert!(joined.contains("v2.0.5"), "缺少版本号");
         assert!(joined.contains("agent · arena-agent"), "缺少模式·模型");
         assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
         assert!(!joined.contains('┌'), "不该再画框了");
@@ -1086,6 +1085,17 @@ mod tests {
     }
 
     #[test]
+    fn cursor_sits_right_after_the_typed_text() {
+        let mut a = app(Mode::Agent);
+        a.input = "ab".to_string();
+        a.cursor = 2;
+        let rows = render_rows(&mut a, Size { cols: 80, rows: 24 }, &Theme::new(false));
+        let (r, c) = a.cursor_at.expect("没记录光标位置");
+        assert!(strip_ansi(&rows[r]).starts_with("❯ ab"), "光标该落在输入行");
+        assert_eq!(c, 5, "2 列前缀 + 2 个字符 + 1 基");
+    }
+
+    #[test]
     fn status_bar_shows_mode_session_and_address() {
         let mut a = app(Mode::Battle);
         a.health = HealthState::Up(Health {
@@ -1126,12 +1136,13 @@ mod tests {
         a.blocks.push(Block::Tool {
             name: "read_file".into(),
             input: "{\"path\":\"src/main.rs\"}".into(),
+            open: false,
         });
         let plain = strip_ansi(&render(&mut a, Size { cols: 80, rows: 24 }, &Theme::new(false)));
         assert!(plain.contains("思考（3 行，Ctrl+R 展开）"));
         assert!(plain.contains("▸ 工具 read_file  src/main.rs"));
         // 展开之后能看到参数和全文
-        a.show_tools = true;
+        a.toggle_all_tools();
         a.show_reasoning = true;
         let plain = strip_ansi(&render(&mut a, Size { cols: 80, rows: 24 }, &Theme::new(false)));
         assert!(plain.contains("path: src/main.rs"));

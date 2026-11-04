@@ -37,6 +37,7 @@ extern "C" {
     fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
     fn poll(fds: *mut PollFd, nfds: c_ulong, timeout: c_int) -> c_int;
     fn read(fd: c_int, buf: *mut u8, count: usize) -> isize;
+    fn write(fd: c_int, buf: *const u8, count: usize) -> isize;
 }
 
 /* ---------- 平台常量（termios 的布局在 Linux 和 BSD 上不一样） ---------- */
@@ -157,6 +158,7 @@ pub struct RawMode {
 impl Drop for RawMode {
     fn drop(&mut self) {
         if self.active {
+            write_out("\x1b[?1006l\x1b[?1000l");
             unsafe {
                 tcsetattr(STDIN_FD, TCSANOW, self.orig.0.as_ptr());
             }
@@ -191,10 +193,19 @@ pub fn enter_raw() -> Option<RawMode> {
     if rc != 0 {
         return None;
     }
+    // 打开鼠标上报（滚轮 + 点击），用 SGR 扩展格式；退出时在 Drop 里关掉
+    write_out("\x1b[?1000h\x1b[?1006h");
     Some(RawMode {
         orig,
         active: true,
     })
+}
+
+fn write_out(s: &str) {
+    let bytes = s.as_bytes();
+    unsafe {
+        write(STDOUT_FD, bytes.as_ptr(), bytes.len());
+    }
 }
 
 /// 起一条读键线程：poll 100ms，超时就把孤立的 ESC 判成 Esc
