@@ -4,7 +4,7 @@ param(
   [string]$Mode = 'agent',
   [string]$Model = '',
   [string]$Fresh = '0',
-  [string]$Out = 'F:\__AI__\tmp\last.json',
+  [string]$Out = $(Join-Path $env:TEMP 'last.json'),
   [string]$Url = 'http://127.0.0.1:17892/ask'
 )
 $ErrorActionPreference = 'Stop'

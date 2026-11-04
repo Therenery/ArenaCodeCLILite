@@ -1,7 +1,8 @@
 $ErrorActionPreference='Continue'
-$out='F:\__AI__\tmp\arb.log'
-$err='F:\__AI__\tmp\arb.err'
-$p = Start-Process -FilePath "node" -ArgumentList "F:\__AI__\work\arena_bridge.js" -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+$dir = $PSScriptRoot
+$out = Join-Path $env:TEMP 'arb.log'
+$err = Join-Path $env:TEMP 'arb.err'
+$p = Start-Process -FilePath "node" -ArgumentList (Join-Path $dir 'arena_bridge.js') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
 Start-Sleep -Seconds 6
 if ($p.HasExited) { "EXITED " + $p.ExitCode } else { "RUNNING " + $p.Id }
 "---LOG---"

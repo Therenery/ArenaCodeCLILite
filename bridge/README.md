@@ -69,11 +69,11 @@ arena doctor             # 隧道 / 桥接 / Chrome / 模型 体检
 
 ## 配置
 
-全部走环境变量，不设也能跑（默认值即作者机器上的路径）。
+全部走环境变量，不设也能跑；默认值都落在用户目录，不依赖任何机器特定路径。
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `ARB_STATE_DIR` | `F:/__AI__/work` | 仓库缓存、调试转储的目录 |
+| `ARB_STATE_DIR` | `~/.arena-bridge` | 仓库缓存、调试转储的目录 |
 | `ARB_MAX_SESSIONS` | `6` | 常驻标签页上限，超了按最久未用淘汰 |
 | `ARB_UPLOAD_ROOTS` | 空（不限制） | `/upload` 允许外发的目录白名单，`;`（Windows）或 `:` 分隔 |
 | `ARB_SSE_PING_MS` | `15000` | SSE 心跳间隔，防长任务被客户端判空闲 |
@@ -209,11 +209,12 @@ Arena 的输入框是 tiptap/ProseMirror。只有逐字符的真实键盘事件�
 ### 从源码构建（开源版）
 
 ~~~powershell
-git clone --depth 1 https://github.com/QwenLM/qwen-code.git
+git clone https://github.com/QwenLM/qwen-code.git
 cd qwen-code
-git apply F:\path\to\arena-bridge\patches\arena-code.patch
-corepack pnpm install
-corepack pnpm run build
+git checkout 1ccf0d43f35e51389573d87e5ae634c4d782f049
+git apply ..\patches\arena-code-cli.patch
+npm install
+npm run build
 ~~~
 
 补丁做四件事：把内置 banner 换成 ARENA 字符画（青色→靛紫渐变）、标题改 Arena Code、清掉所有俏皮加载文案、程序名改成 arena。

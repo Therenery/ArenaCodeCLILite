@@ -23,14 +23,14 @@ arena ❯ 好的，我先看一下目录树……
 Windows（目标产物 `target\release\arena-lite.exe`）：
 
 ```powershell
-cd bridge\arena-lite
+cd arena-lite
 cargo build --release        # 零警告；只有 std，不会去 crates.io 拉任何东西
 ```
 
 Linux / macOS：
 
 ```bash
-cd bridge/arena-lite
+cd arena-lite
 cargo build --release        # 产物 target/release/arena-lite
 ```
 
@@ -271,7 +271,7 @@ GET /history?session=<name>
 ## 10. 目录
 
 ```
-bridge/arena-lite/
+arena-lite/
 ├── Cargo.toml            # 无 [dependencies]，就是这个 crate 的全部依赖声明
 ├── README.md
 ├── scripts/

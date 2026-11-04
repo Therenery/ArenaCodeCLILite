@@ -46,7 +46,7 @@ bash scripts/check.sh        # 编 release + 跑全部单测 + 顺手做一次 W
 rem 1. 起 Chrome（带调试端口，登录 arena.ai，切 Agent 模式）
 "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
   --remote-debugging-port=9222 ^
-  --user-data-dir="F:\__AI__\profiles\arena" ^
+  --user-data-dir="%USERPROFILE%\.arena-bridge\chrome-profile" ^
   --no-first-run --no-default-browser-check
 
 rem 2. 起桥

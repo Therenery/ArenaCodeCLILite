@@ -23,7 +23,7 @@ const MAX_QUEUE = 4;
 
 /* ---------- 可配置项（全部有默认值，不设也能跑） ---------- */
 // 状态目录：仓库缓存、调试转储都落在这里
-const STATE_DIR = process.env.ARB_STATE_DIR || 'F:/__AI__/work';
+const STATE_DIR = process.env.ARB_STATE_DIR || path.join(require('os').homedir(), '.arena-bridge');
 // 常驻标签页上限，超过就按最久未用淘汰，避免标签堆积
 const MAX_SESSIONS = Math.max(1, Number(process.env.ARB_MAX_SESSIONS) || 6);
 // 默认不打印 prompt 正文，也不落盘；排障时再开
