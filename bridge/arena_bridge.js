@@ -1033,9 +1033,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (u.pathname === '/new') {
     const name = u.searchParams.get('session') || DEFAULT_SESSION;
-    histories.delete(name); contextLost.delete(name);
+        histories.delete(name); contextLost.delete(name);
     const s = sessions.get(name);
     if (s) { try { await cdpApi('GET', '/json/close/' + s.tabId); } catch (e) {} try { s.cdp.close(); } catch (e) {} sessions.delete(name); }
+    const bs = sessions.get(name + '#battle');
+    if (bs) { try { await cdpApi('GET', '/json/close/' + bs.tabId); } catch (e) {} try { bs.cdp.close(); } catch (e) {} sessions.delete(name + '#battle'); }
+    battleRounds.delete(name);
     return send(200, { ok: true });
   }
   if ((u.pathname === '/v1/chat/completions' || u.pathname === '/chat/completions') && req.method === 'POST') {

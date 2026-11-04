@@ -121,38 +121,28 @@ pub fn bell() -> &'static str {
 
 /* ---------- 彩色 LOGO ---------- */
 
-/// 4 行小 logo，按列做青→品红渐变，不占满屏
-pub const LOGO_LINES: [&str; 4] = [
-    r"  ▄▀█ █▀█ █▀▀ █▄░█ ▄▀█ ",
-    r"  █▀█ █▀▄ ██▄ █░▀█ █▀█ ",
-    r"  ────────────────────  ",
-    r"   arena-lite · 2.0      ",
+/// 6 行 LOGO，ANSI Shadow 字形，整块笔画，宽 46 列
+pub const LOGO_LINES: [&str; 6] = [
+    r" █████╗  ██████╗  ███████╗ ███╗   ██╗  █████╗ ",
+    r"██╔══██╗ ██╔══██╗ ██╔════╝ ████╗  ██║ ██╔══██╗",
+    r"███████║ ██████╔╝ █████╗   ██╔██╗ ██║ ███████║",
+    r"██╔══██║ ██╔══██╗ ██╔══╝   ██║╚██╗██║ ██╔══██║",
+    r"██║  ██║ ██║  ██║ ███████╗ ██║ ╚████║ ██║  ██║",
+    r"╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝",
 ];
 
-/// 生成每行的渐变着色版本（青 51 → 品红 201）
+/// 两级着色：主体青蓝 45，最底一行阴影压暗到 31
 pub fn logo_ansi(theme: &Theme) -> Vec<String> {
     if !theme.enabled {
         return LOGO_LINES.iter().map(|s| s.to_string()).collect();
     }
+    let last = LOGO_LINES.len() - 1;
     LOGO_LINES
         .iter()
-        .map(|line| {
-            let chars: Vec<char> = line.chars().collect();
-            let total = chars.len().max(1);
-            let mut out = String::new();
-            for (i, ch) in chars.iter().enumerate() {
-                if *ch == ' ' {
-                    out.push(' ');
-                    continue;
-                }
-                // 51..=201 之间线性插值，形成青 → 蓝 → 品红的双色渐变
-                let t = i as f32 / total as f32;
-                let low = 51.0 + (201.0 - 51.0) * t;
-                let mid = ((low as i32) * 2 + 87) / 3; // 向暖色偏一点
-                out.push_str(&format!("\x1b[38;5;{}m{}", mid.clamp(16, 231), ch));
-            }
-            out.push_str("\x1b[0m");
-            out
+        .enumerate()
+        .map(|(i, line)| {
+            let code = if i == last { "38;5;31" } else { "38;5;45" };
+            format!("\x1b[{}m{}\x1b[0m", code, line)
         })
         .collect()
 }
@@ -184,9 +174,9 @@ mod tests {
 
     #[test]
     fn logo_has_expected_shape() {
-        assert_eq!(LOGO_LINES.len(), 4);
+        assert_eq!(LOGO_LINES.len(), 6);
         let plain = logo_ansi(&Theme::new(false));
-        assert_eq!(plain.len(), 4);
+        assert_eq!(plain.len(), 6);
         assert!(plain[0].contains("ARENA") || plain[0].contains('█'));
         let colored = logo_ansi(&Theme::new(true));
         assert!(colored[0].contains("\x1b[38;5;"));

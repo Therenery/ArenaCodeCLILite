@@ -578,17 +578,25 @@ pub fn render_logo(size: Size, th: &Theme) -> String {
     let size = size.sane();
     let w = size.cols as usize;
     let h = size.rows as usize;
-    let logo = theme::logo_ansi(th);
+    let full_w = theme::LOGO_LINES
+        .iter()
+        .map(|l| str_width(l))
+        .max()
+        .unwrap_or(0);
+    // 终端比 logo 还窄就退化成一行文字，别让它折行糊成一团
+    let (logo, logo_w) = if w < full_w + 2 {
+        (vec![th.paint_bold("ARENA", Palette::Accent)], 5usize)
+    } else {
+        (theme::logo_ansi(th), full_w)
+    };
     let logo_h = logo.len();
-    let top = h.saturating_sub(logo_h) / 2;
+    let top = h.saturating_sub(logo_h + 3) / 2;
+    let indent = " ".repeat(w.saturating_sub(logo_w) / 2);
     let mut out = String::new();
     out.push_str(theme::CURSOR_HIDE);
     for r in 0..h {
         out.push_str(&theme::goto((r + 1) as u16, 1));
         out.push_str(theme::CLEAR_LINE);
-        if r == top {
-            out.push_str(&th.dim("按任意键跳过"));
-        }
     }
     for (i, line) in logo.iter().enumerate() {
         let row = top + i + 1;
@@ -597,16 +605,22 @@ pub fn render_logo(size: Size, th: &Theme) -> String {
         }
         out.push_str(&theme::goto(row as u16, 1));
         out.push_str(theme::CLEAR_LINE);
+        out.push_str(&indent);
         out.push_str(line);
     }
-    // 底部一行小字
     let hint = "arena-lite 2.0 · Enter 发送 · /help 命令";
-    if h > logo_h + top + 2 {
-        out.push_str(&theme::goto((top + logo_h + 2) as u16, 1));
+    let hint_row = top + logo_h + 2;
+    if hint_row <= h {
+        out.push_str(&theme::goto(hint_row as u16, 1));
         out.push_str(theme::CLEAR_LINE);
+        out.push_str(&" ".repeat(w.saturating_sub(str_width(hint)) / 2));
         out.push_str(&th.dim(hint));
     }
-    let _ = w;
+    if h >= 2 {
+        out.push_str(&theme::goto(h as u16, 1));
+        out.push_str(theme::CLEAR_LINE);
+        out.push_str(&th.dim("按任意键跳过"));
+    }
     out.push_str(theme::CURSOR_SHOW);
     out
 }
