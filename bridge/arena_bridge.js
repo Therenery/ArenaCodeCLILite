@@ -10,7 +10,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const { parseFrame } = require('./lib/parse');
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 const CDP_PORT = 9222;
 const PORT = 17892;
 const HOST = '127.0.0.1';
@@ -238,6 +238,47 @@ const EDITOR_SEL = `document.querySelector('textarea[name=message]')||document.q
 const READY_JS = `!!(${EDITOR_SEL})`;
 const VAL_JS = `(function(){var e=${EDITOR_SEL};if(!e)return 0;var v=(e.value!==undefined?e.value:(e.innerText||''));return String(v).replace(/[\s\u00a0\u200b]/g,'').length})()`;
 
+
+// 左侧栏的会话列表：每个会话是一个指向 /agent/<uuid> 或 /c/<uuid> 的链接
+const CONVERSATIONS_JS = String.raw`JSON.stringify((function(){
+  var out=[], seen={};
+  var as=[].slice.call(document.querySelectorAll('a[href]'));
+  as.forEach(function(a){
+    var h=a.getAttribute('href')||'';
+    var m=h.match(/^\/(agent|c)\/([0-9a-f-]{8,})/i);
+    if(!m||seen[h]) return;
+    seen[h]=1;
+    var t=String(a.innerText||'').replace(/\u00a0/g,' ').trim().split('\n')[0].trim();
+    out.push({id:m[2], url:h, kind:m[1], title:t.slice(0,120)});
+  });
+  return {ok:true, conversations:out.slice(0,60), url:location.href};
+})())`;
+
+// 从当前页面读对话。Agent 页有明确的角色属性；/c/ 页只有气泡样式，按气泡对齐猜。
+const HISTORY_JS = String.raw`JSON.stringify((function(){
+  function clean(t){ return String(t||'').replace(/\u00a0/g,' ').trim(); }
+  var out=[];
+  var turns=[].slice.call(document.querySelectorAll('[data-agent-transcript-message="true"]'));
+  if(turns.length){
+    turns.forEach(function(t){
+      var u=t.querySelector('[data-user-message-body-row="true"]');
+      if(u){ var ut=clean(u.innerText); if(ut) out.push({role:'user', text:ut}); }
+      var ps=[].slice.call(t.querySelectorAll('.prose')).filter(function(p){ return !p.closest('[data-user-message-body-row="true"]'); });
+      var at=ps.map(function(p){return clean(p.innerText);}).filter(Boolean).join('\n\n');
+      if(at) out.push({role:'assistant', text:at});
+    });
+    return {ok:true, messages:out, via:'role-attrs', url:location.href, turns:out.length};
+  }
+  var ps2=[].slice.call(document.querySelectorAll('.prose')).map(function(p){
+    return {p:p, y:p.getBoundingClientRect().top, x:p.getBoundingClientRect().left, text:clean(p.innerText)};
+  }).filter(function(o){ return o.text; });
+  ps2.sort(function(a,b){ return a.y-b.y || a.x-b.x; });
+  ps2.forEach(function(o){
+    var user=!!o.p.closest('[class*="bg-surface-raised"]');
+    out.push({role:user?'user':'assistant', text:o.text});
+  });
+  return {ok:true, messages:out, via:'bubble-align', url:location.href, turns:out.length};
+})())`;
 const RESUME_JS = "(function(){var cs=[].slice.call(document.querySelectorAll('[aria-label]')).filter(function(x){return /close review/i.test(x.getAttribute('aria-label')||'')})[0];if(cs){cs.click();return 2}var bs=[].slice.call(document.querySelectorAll('button'));var b=bs.filter(function(x){return /^\\s*(关闭|Close)\\s*$/i.test((x.getAttribute('aria-label')||''))})[0];if(b){b.click();return 1}return 0})()";
 const REVIEW_JS = "(()=>{try{var t=(document.body&&document.body.innerText)||'';return t.indexOf('此任务成功了吗')>=0||t.indexOf('Did this task succeed')>=0}catch(e){return false}})()";
 
@@ -267,9 +308,10 @@ function dismissReviewSoon(c) {
   })().catch(() => {});
 }
 
-async function waitReady(c) {
+async function waitReady(c, maxMs) {
   const t0 = Date.now();
-  while (Date.now() - t0 < READY_TIMEOUT_MS) {
+  const lim = maxMs || READY_TIMEOUT_MS;
+  while (Date.now() - t0 < lim) {
     if (await c.ev(VERIFY_JS)) throw new Error('NEED_VERIFY');
     if (await c.ev(READY_JS)) { await sleep(600); return; }
     if (await c.ev(REVIEW_JS)) {
@@ -332,7 +374,7 @@ function minimizeChrome() {
   try { exec('schtasks /run /tn arena_minimize', () => {}); } catch (e) {}
 }
 
-async function openTab(model, mode, models) {
+async function openTab(model, mode, models, navUrl) {
   const q = [];
   if (model && !/^arena-/.test(model)) q.push('model_a=' + encodeURIComponent(model));
   let base = '/agent';
@@ -345,9 +387,9 @@ async function openTab(model, mode, models) {
     // 对战没有独立路由：首页的 Mode 下拉里选 Battle
     base = '/';
   }
-  const url = 'https://arena.ai' + base + (q.length ? '?' + q.join('&') : '');
+  const url = navUrl || ('https://arena.ai' + base + (q.length ? '?' + q.join('&') : ''));
   // 对战 / 并排每一轮都是独立会话，接管旧页面会把上一轮的问答带进来
-  const adopted = mode === 'battle' || mode === 'side' ? null : await adoptTab(base);
+  const adopted = (navUrl || mode === 'battle' || mode === 'side') ? null : await adoptTab(base);
   if (adopted) {
     log('adopted tab', adopted.tabId, String(adopted.url).slice(0, 60));
     minimizeChrome();
@@ -549,7 +591,7 @@ async function getSession(name, opts) {
   await evictSessions(key);
   let r = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { r = await openTab(opts.model, opts.mode, opts.models); break; }
+    try { r = await openTab(opts.model, opts.mode, opts.models, opts.url); break; }
     catch (e) {
       log('openTab failed #' + attempt + ': ' + e.message);
       if (attempt === 2) throw e;
@@ -1041,6 +1083,80 @@ const server = http.createServer(async (req, res) => {
     battleRounds.delete(name);
     return send(200, { ok: true });
   }
+  if (u.pathname === '/conversations') {
+    const name = u.searchParams.get('session') || DEFAULT_SESSION;
+    try {
+      const s = await getSession(name, { mode: 'agent' });
+      if (await s.cdp.ev(VERIFY_JS)) return send(409, { ok: false, error: 'NEED_VERIFY' });
+      const data = await s.cdp.evJson(CONVERSATIONS_JS);
+      if (!data || !data.ok) return send(500, { ok: false, error: '页面里没读到会话列表' });
+      return send(200, data);
+    } catch (e) {
+      return send(/NEED_VERIFY/.test(e.message) ? 409 : 500, { ok: false, error: e.message });
+    }
+  }
+
+  if (u.pathname === '/history') {
+    const name = u.searchParams.get('session') || DEFAULT_SESSION;
+    const s = sessions.get(name);
+    if (!s) return send(404, { ok: false, error: '这个会话没有打开的标签页（先问一句，或先 /resume 选一个）' });
+    try {
+      const data = await s.cdp.evJson(HISTORY_JS);
+      if (!data || !data.ok) return send(500, { ok: false, error: '页面里没读到对话' });
+      return send(200, Object.assign({ session: name }, data));
+    } catch (e) {
+      return send(500, { ok: false, error: e.message });
+    }
+  }
+
+  if (u.pathname === '/open' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { return send(400, { ok: false, error: 'bad json' }); }
+    const name = body.session || DEFAULT_SESSION;
+    let target = String(body.url || '');
+    if (target.charAt(0) === '/') target = 'https://arena.ai' + target;
+    if (!/^https:\/\/arena\.ai\/(agent|c)\/[0-9a-f-]{8,}/i.test(target)) {
+      return send(400, { ok: false, error: 'url 必须是 arena.ai 的会话地址' });
+    }
+    try {
+      let s = sessions.get(name);
+      if (s && s.busy) return send(409, { ok: false, error: '正在生成，先停下再切换会话' });
+      if (!s) {
+        s = await getSession(name, { mode: body.mode || 'agent', url: target });
+      } else {
+        try {
+          const cur = String(await s.cdp.ev('location.href') || '');
+          if (cur !== target) {
+            // 后台标签页的重载会被 Chrome 节流，先提到前台再导航
+            await s.cdp.send('Page.bringToFront').catch(() => {});
+            await s.cdp.send('Page.navigate', { url: target });
+          }
+          await waitReady(s.cdp, 25000);
+        } catch (e) {
+          // 标签页可能已经卡死（渲染进程崩了但 JS 还活着），换一个新标签页重来
+          log('open failed on existing tab, reopening: ' + e.message);
+          try { await cdpApi('GET', '/json/close/' + s.tabId); } catch (e2) {}
+          try { s.cdp.close(); } catch (e2) {}
+          sessions.delete(name);
+          s = await getSession(name, { mode: body.mode || 'agent', url: target });
+        }
+        // 对话正文比输入框晚一点渲染，等它出来再让客户端读历史
+        for (let i = 0; i < 10; i++) {
+          const got = await s.cdp.ev("!!document.querySelector('[data-user-message-body-row=\"true\"],[data-agent-transcript-message=\"true\"],.prose')").catch(() => false);
+          if (got) break;
+          await sleep(400);
+        }
+      }
+      // 页面已经是唯一上下文，旧的回放缓存作废
+      histories.delete(name);
+      contextLost.delete(name);
+      minimizeChrome();
+      return send(200, { ok: true, session: name, url: target });
+    } catch (e) {
+      return send(/NEED_VERIFY/.test(e.message) ? 409 : 500, { ok: false, error: e.message });
+    }
+  }
+
   if ((u.pathname === '/v1/chat/completions' || u.pathname === '/chat/completions') && req.method === 'POST') {
     let body;
     try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { return send(400, { error: { message: 'bad json', type: 'invalid_request_error' } }); }

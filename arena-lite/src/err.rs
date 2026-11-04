@@ -139,7 +139,7 @@ impl BridgeError {
 
 fn hint_for_status(status: u16) -> &'static str {
     match status {
-        404 => "路径或会话名不对：确认桥版本够新（/history 需要 0.4 以上），会话名从 /health 的 sessions 里挑。",
+        404 => "这个会话还没有打开的标签页：先问一句，或用 /resume 打开一个网页端会话。",
         400 => "请求体被桥拒了：检查提示词是否为空、JSON 是否合规。",
         413 => "上传太大，桥只收 4MB 以内的请求体。",
         500 => "桥内部出错：看桥窗口的日志（arena_bridge.js 会打印 v1 error）。",

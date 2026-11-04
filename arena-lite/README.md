@@ -74,9 +74,10 @@ arena-lite --mode side "对比一下"     # 指定模式单发
 arena-lite --mode battle "打一架"     # 对战（双栏合一）
 arena-lite health                   # 桥体检
 arena-lite models                   # 模型列表
-arena-lite history main             # 打印网页端历史
-arena-lite resume main              # 载入 main 的网页端历史；有终端就进 TUI
-arena-lite resume main "接着说"       # 带着历史单发一条
+arena-lite history main             # 打印 main 标签页当前的对话
+arena-lite resume                   # 列出网页左侧栏的会话
+arena-lite resume 3                 # 打开第 3 个；有终端就进 TUI
+arena-lite resume /agent/<uuid> "接着说"  # 打开指定会话并单发
 arena-lite --version
 ```
 
@@ -141,8 +142,8 @@ arena-lite --version
 | `/mode <agent\|direct\|side\|battle>` | 同上，显式写法 |
 | `/models [a,b]` | 查看 / 设置双栏两栏模型 |
 | `/session <名字>` | 切会话名 |
-| `/resume [会话]` | 不带参数：列出可用会话（名字 + 最后一条摘要 + 上次活动时间 + 条数），输入编号即载入；带参数直接载入 |
-| `/sessions` | 同 `/resume` |
+| `/resume [编号|链接]` | 不带参数：列出网页左侧栏的会话，输入编号即打开；带参数直接打开 |
+| `/sessions` | 列出桥当前的标签页（调试用，不载入） |
 | `/new` | 清空服务端会话（`GET /new`） |
 | `/health` | 体检桥（`GET /health`） |
 | `/repos` `/repo <owner/name>` | 查看 / 切换工作区仓库（切仓库等于开新对话） |
@@ -194,26 +195,35 @@ SSE 侧：逐行读 `data: {...}`，`data: [DONE]` 结束；`choices[0].delta.co
 
 ---
 
-## 7. resume：把网页端历史灌回对话区
+## 7. resume：打开网页端会话
 
 客户端侧：
 
 ```bash
-arena-lite resume main            # 有终端 → 进 TUI 并载入历史
-arena-lite resume main "接着说"    # 单发，历史会作为 messages 一起送
+arena-lite resume                          # 列出网页左侧栏的会话（编号 + 标题）
+arena-lite resume 3                        # 打开第 3 个；有终端进 TUI，没有就打印对话
+arena-lite resume /agent/<uuid> "接着说"    # 打开指定会话并单发
 ```
 
-TUI 里 `/resume` 会列出桥 `/health` 里的会话，逐个用 `GET /history?session=<name>` 读摘要（最后一条 + 条数 + 上次活动时间），输入编号即载入。
+TUI 里 `/resume` 列出网页左侧栏的会话，输入编号即打开；`/resume <编号|链接>` 也可以。打开之后页面自己把完整对话加载回来，客户端只读一遍用于显示，不再把文本灌回模型上下文。
 
-桥侧新增的是只读端点（`arena_bridge.js` 0.4.0）：
+桥侧端点（`arena_bridge.js` 0.4.0）：
 
 ```
-GET /history?session=<name>
-→ { ok, session, at, turns, via, messages:[{role, text}] }
+GET  /conversations?session=<name>
+→ { ok, conversations:[{id, url, kind, title}], url }
+
+POST /open  { session, url }
+→ { ok, session, url }
+
+GET  /history?session=<name>
+→ { ok, session, messages:[{role, text}], via, url }
 ```
 
-`via` 说明它用哪层启发式读的 DOM：`role-attrs`（最准）/ `bubble-align`（按气泡靠右判用户）/ `alternate`（交替猜，客户端会额外提示「顺序是猜的」）。
-**读不到就明确失败**：返回 `{ok:false,error:...}` 或 404，客户端会打印原因并以非 0 退出，不会假装支持、也不假装有上下文。
+- `conversations` 读左侧栏的 `/agent/<uuid>`、`/c/<uuid>` 链接；`title` 取链接的第一行文字。
+- `open` 把该会话的标签页导航到目标地址，等输入框和正文都渲染完再返回；标签页卡死会关掉重开一个。
+- `history` 只用于显示：Agent 页按 `data-user-message-body-row` / `data-agent-transcript-message` 取角色，`/c/` 页按气泡位置排；`via` 说明用了哪套（`role-attrs` / `bubble-align`）。
+- 读不到就明确失败（`{ok:false,error}` 或 404），客户端打印原因并以非 0 退出。
 
 ---
 

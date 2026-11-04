@@ -1,6 +1,6 @@
 //! 主循环收到的消息。键盘、网络、健康检查都汇到这一个管道里。
 
-use crate::client::{Health, History, StreamEvent};
+use crate::client::{Conversation, Health, History, StreamEvent};
 use crate::err::BridgeError;
 use crate::keys::Key;
 
@@ -28,6 +28,8 @@ pub enum Msg {
     History(Result<History, BridgeError>),
     /// 会话列表（名字 + 摘要 + 时间）
     SessionList(Vec<SessionInfo>),
+    /// 网页端左侧栏的会话列表（/resume）
+    ConversationList(Vec<Conversation>),
     /// 一次性提示（比如「已切到 side 模式」）
     Notice(String),
 }

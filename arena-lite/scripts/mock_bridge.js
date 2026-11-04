@@ -39,6 +39,22 @@ http
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ models: ['auto', 'max'] }));
       }
+      if (u.pathname === '/conversations') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            ok: true,
+            url: 'https://arena.ai/agent/conv1',
+            conversations: [
+              { id: 'conv1', url: '/agent/conv1', kind: 'agent', title: '这是网页端的第一句' },
+            ],
+          }),
+        );
+      }
+      if (u.pathname === '/open' && req.method === 'POST') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, session: 'main', url: '/agent/conv1' }));
+      }
       if (u.pathname === '/history') {
         const name = u.searchParams.get('session') || 'main';
         if (name !== 'main' && name !== '设计') {

@@ -104,9 +104,19 @@ pub struct History {
     pub messages: Vec<HistoryMsg>,
     /// 桥能提供就带上（毫秒时间戳），拿不到就是 None
     pub at: Option<i64>,
-    pub turns: i64,
     /// 桥读 DOM 用的策略：role-attrs / bubble-align / alternate
     pub via: String,
+}
+
+/// 网页端左侧栏里的一个会话
+#[derive(Debug, Clone, PartialEq)]
+pub struct Conversation {
+    pub id: String,
+    /// 相对地址，形如 /agent/<uuid> 或 /c/<uuid>
+    pub url: String,
+    pub title: String,
+    /// agent / c
+    pub kind: String,
 }
 
 pub struct Client {
@@ -276,9 +286,59 @@ impl Client {
                 .to_string(),
             messages,
             at: v.i64_at(&["at"]),
-            turns: v.i64_at(&["turns"]).unwrap_or(0),
             via: v.str_at(&["via"]).unwrap_or("").to_string(),
         })
+    }
+
+    /// 列网页端左侧栏里的会话（桥的 GET /conversations）
+    pub fn conversations(&self, session: &str) -> Result<Vec<Conversation>, BridgeError> {
+        let path = urlenc::with_query("/conversations", &[("session", session)]);
+        let v = self.get_json(&path)?;
+        if !v.bool_at(&["ok"]).unwrap_or(false) {
+            return Err(BridgeError::Http {
+                status: 200,
+                message: v
+                    .str_at(&["error"])
+                    .unwrap_or("桥读不到网页端会话列表")
+                    .to_string(),
+            });
+        }
+        let mut out = Vec::new();
+        if let Some(arr) = v.arr_at(&["conversations"]) {
+            for c in arr {
+                let url = c.str_at(&["url"]).unwrap_or("").to_string();
+                if url.is_empty() {
+                    continue;
+                }
+                out.push(Conversation {
+                    id: c.str_at(&["id"]).unwrap_or("").to_string(),
+                    url,
+                    title: c.str_at(&["title"]).unwrap_or("").to_string(),
+                    kind: c.str_at(&["kind"]).unwrap_or("agent").to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// 让当前会话的标签页打开某个网页端会话（桥的 POST /open）
+    pub fn open(&self, session: &str, url: &str) -> Result<(), BridgeError> {
+        let body = format!(
+            "{{\"session\":{},\"url\":{}}}",
+            json::quoted(session),
+            json::quoted(url)
+        );
+        let v = self.post_json("/open", body)?;
+        if !v.bool_at(&["ok"]).unwrap_or(false) {
+            return Err(BridgeError::Http {
+                status: 200,
+                message: v
+                    .str_at(&["error"])
+                    .unwrap_or("打开会话失败")
+                    .to_string(),
+            });
+        }
+        Ok(())
     }
 
     /* ------------------------------ 写接口 ------------------------------ */

@@ -7,7 +7,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::client::{ChatOpts, Client, Health, History, Msg as ChatMsg, StreamEvent};
+use crate::client::{ChatOpts, Client, Conversation, Health, History, Msg as ChatMsg, StreamEvent};
 use crate::err::{truncate, BridgeError};
 use crate::event::{Msg, SessionInfo};
 use crate::keys::Key;
@@ -100,7 +100,7 @@ pub struct App {
     pub quit: bool,
     pub dirty: bool,
 
-    pub sessions: Vec<SessionInfo>,
+    pub conversations: Vec<Conversation>,
     pub pending_pick: Option<Vec<String>>,
     pub last_prompt: Option<String>,
 }
@@ -131,7 +131,7 @@ impl App {
             abort: Arc::new(AtomicBool::new(false)),
             quit: false,
             dirty: true,
-            sessions: Vec::new(),
+            conversations: Vec::new(),
             pending_pick: None,
             last_prompt: None,
         }
@@ -395,9 +395,9 @@ impl App {
             if let Ok(n) = raw.parse::<usize>() {
                 if n >= 1 && n <= list.len() {
                     self.pending_pick = None;
-                    let name = list[n - 1].clone();
+                    let url = list[n - 1].clone();
                     self.set_input(String::new());
-                    self.load_session(&name);
+                    self.open_conversation(&url);
                     return;
                 }
             }
@@ -569,14 +569,12 @@ impl App {
     }
 
     pub fn on_session_list(&mut self, list: Vec<SessionInfo>) {
-        self.sessions = list.clone();
-        self.pending_pick = Some(list.iter().map(|s| s.name.clone()).collect());
+        self.pending_pick = None;
         if list.is_empty() {
             self.push_system("桥上没有打开的会话（先随便问一句，会话才会建起来）");
-            self.pending_pick = None;
             return;
         }
-        self.push_system("可用会话（输入编号或 /resume <名字> 载入）：");
+        self.push_system("桥上的标签页（要打开网页端会话请用 /resume）：");
         for (i, s) in list.iter().enumerate() {
             let when = s.at.map(format_relative).unwrap_or_else(|| "时间未知".into());
             let last = if s.last.trim().is_empty() {
@@ -597,6 +595,26 @@ impl App {
                 last,
                 extra
             ));
+        }
+    }
+
+    pub fn on_conversation_list(&mut self, list: Vec<Conversation>) {
+        self.conversations = list.clone();
+        self.pending_pick = Some(list.iter().map(|c| c.url.clone()).collect());
+        if list.is_empty() {
+            self.push_system("网页左侧栏里没有会话（先在网页里聊一句）");
+            self.pending_pick = None;
+            return;
+        }
+        self.push_system("网页端会话（输入编号打开）：");
+        for (i, c) in list.iter().enumerate() {
+            let kind = if c.kind == "c" { "对战" } else { "Agent" };
+            let title = if c.title.trim().is_empty() {
+                "（无标题）".to_string()
+            } else {
+                truncate(c.title.trim(), 50)
+            };
+            self.push_system(format!("  {}. [{}] {}", i + 1, kind, title));
         }
     }
 
@@ -625,15 +643,8 @@ impl App {
                 }
                 self.follow = true;
                 self.scroll_top = usize::MAX;
-                let counted = if h.turns > 0 {
-                    h.turns as usize
-                } else {
-                    h.messages.len()
-                };
                 self.push_system(format!(
-                    "已载入会话 {}（{} 条，实际装载 {} 条），之后的提问会接着它",
-                    h.session,
-                    counted,
+                    "已载入 {} 条消息，之后的提问会接着页面里的这段对话",
                     h.messages.len()
                 ));
                 if h.via == "alternate" {
@@ -702,9 +713,9 @@ impl App {
             }
             "/resume" => {
                 if rest.is_empty() {
-                    self.list_sessions();
+                    self.list_conversations();
                 } else {
-                    self.load_session(&rest);
+                    self.resume_target(&rest);
                 }
             }
             "/sessions" => self.list_sessions(),
@@ -868,7 +879,7 @@ impl App {
         self.push_system("  /mode <agent|direct|side|battle>");
         self.push_system("  /models [a,b]          查看/设置双栏两栏模型");
         self.push_system("  /session <名字>        切会话名");
-        self.push_system("  /resume [会话]         列出会话并载入网页端历史");
+        self.push_system("  /resume [编号|链接]    列出网页端会话并打开选中的那个");
         self.push_system("  /new                   清空服务端会话");
         self.push_system("  /health                体检桥");
         self.push_system("  /repos  /repo <名>     查看/切换仓库");
@@ -933,14 +944,65 @@ impl App {
         });
     }
 
-    fn load_session(&mut self, name: &str) {
-        self.cfg.session = name.to_string();
-        self.push_system(format!("正在读会话 {} 的网页端历史…", name));
+    fn list_conversations(&mut self) {
+        self.push_system("正在读网页端会话列表…");
         let client = Arc::clone(&self.client);
         let tx = self.tx.clone();
-        let name = name.to_string();
+        let session = self.cfg.session.clone();
+        std::thread::spawn(move || match client.conversations(&session) {
+            Ok(list) => {
+                let _ = tx.send(Msg::ConversationList(list));
+            }
+            Err(e) => {
+                let _ = tx.send(Msg::Notice(format!("读会话列表失败：{}", e.short())));
+            }
+        });
+    }
+
+    fn resume_target(&mut self, raw: &str) {
+        if let Ok(n) = raw.parse::<usize>() {
+            if let Some(list) = self.pending_pick.clone() {
+                if n >= 1 && n <= list.len() {
+                    self.pending_pick = None;
+                    self.open_conversation(&list[n - 1]);
+                    return;
+                }
+            }
+            self.notice("编号超出列表范围，先 /resume 看一遍");
+            return;
+        }
+        if raw.starts_with("https://") || raw.starts_with("/agent/") || raw.starts_with("/c/") {
+            self.open_conversation(raw);
+            return;
+        }
+        if let Some(c) = self.conversations.iter().find(|c| c.id == raw) {
+            let url = c.url.clone();
+            self.open_conversation(&url);
+            return;
+        }
+        self.notice("用法：/resume（列列表）· /resume 3（按编号）· /resume <会话链接>");
+    }
+
+    fn open_conversation(&mut self, url: &str) {
+        self.pending_pick = None;
+        let title = self
+            .conversations
+            .iter()
+            .find(|c| c.url == url)
+            .map(|c| truncate(c.title.trim(), 40))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| truncate(url, 40));
+        self.push_system(format!("正在打开「{}」…", title));
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        let session = self.cfg.session.clone();
+        let url = url.to_string();
         std::thread::spawn(move || {
-            let res = client.history(&name);
+            if let Err(e) = client.open(&session, &url) {
+                let _ = tx.send(Msg::Notice(format!("打开会话失败：{}", e.human())));
+                return;
+            }
+            let res = client.history(&session);
             let _ = tx.send(Msg::History(res));
         });
     }
@@ -1005,7 +1067,7 @@ impl App {
                 self.blocks.clear();
                 self.notice("屏幕已清空（服务端上下文保留）");
             }
-            Key::Ctrl('n') => self.list_sessions(),
+            Key::Ctrl('n') => self.list_conversations(),
             Key::Ctrl('d') => self.quit = true,
             Key::PageUp => self.scroll_page(true),
             Key::PageDown => self.scroll_page(false),

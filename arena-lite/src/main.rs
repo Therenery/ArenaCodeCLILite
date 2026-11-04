@@ -44,7 +44,7 @@ enum Cmd {
     Health,
     Models,
     History { session: String },
-    Resume { session: String, prompt: Option<String> },
+    Resume { target: Option<String>, prompt: Option<String> },
     Version,
     Help,
     BadUsage(String),
@@ -190,22 +190,21 @@ fn parse_args(args: Vec<String>) -> Opts {
             session: opts.session.clone(),
         },
         Some("resume") => {
-            // resume <会话名> [问题]
+            // resume [编号|链接] [问题]
             let mut parts: Vec<String> = positional.clone();
-            if parts.is_empty() {
-                Cmd::BadUsage("resume 后面要跟会话名：arena-lite resume main".into())
+            let target = if parts.is_empty() {
+                None
             } else {
-                let session = parts.remove(0);
-                let rest = parts.join(" ");
-                opts.session = session.clone();
-                Cmd::Resume {
-                    session,
-                    prompt: if rest.trim().is_empty() {
-                        None
-                    } else {
-                        Some(rest)
-                    },
-                }
+                Some(parts.remove(0))
+            };
+            let rest = parts.join(" ");
+            Cmd::Resume {
+                target,
+                prompt: if rest.trim().is_empty() {
+                    None
+                } else {
+                    Some(rest)
+                },
             }
         }
         Some("chat") | Some("tui") => Cmd::Tui { prompt },
@@ -228,8 +227,8 @@ fn usage() -> String {
     s.push_str("  arena-lite --mode side \"对比一下\"   指定模式单发\n");
     s.push_str("  arena-lite health                 体检桥\n");
     s.push_str("  arena-lite models                 列出模型\n");
-    s.push_str("  arena-lite history [会话]          打印网页端历史\n");
-    s.push_str("  arena-lite resume <会话> [问题]     载入该会话历史（有终端就进 TUI）\n\n");
+    s.push_str("  arena-lite history [会话]          打印当前标签页的对话\n");
+    s.push_str("  arena-lite resume [编号|链接] [问题] 列出网页端会话，或打开指定会话（有终端就进 TUI）\n\n");
     s.push_str("选项：\n");
     s.push_str("  -m, --mode <agent|direct|side|battle>   常驻模式，默认 agent\n");
     s.push_str("  -s, --session <名字>                    会话名，默认 main\n");
@@ -272,31 +271,7 @@ fn main() {
         Cmd::Models => cmd_models(&opts),
         Cmd::History { session } => cmd_history(&opts, session),
         Cmd::OneShot { prompt } => cmd_oneshot(&opts, None, prompt.clone()),
-        Cmd::Resume { session, prompt } => match prompt {
-            Some(p) => match load_history_msgs(&opts, session) {
-                Ok(pre) => cmd_oneshot(&opts, Some(pre), p.clone()),
-                Err(msg) => {
-                    eprintln!("{}", msg);
-                    eprintln!("这条会话没读回来，就不接着聊了（不然等于假装有上下文）。");
-                    1
-                }
-            },
-            None => {
-                if term::is_tty() {
-                    let pre = match load_history_msgs(&opts, session) {
-                        Ok(v) => v,
-                        Err(msg) => {
-                            eprintln!("{}", msg);
-                            eprintln!("仍然进入 TUI，但不会载入历史。");
-                            Vec::new()
-                        }
-                    };
-                    run_tui(&opts, Some(session.clone()), Some(pre))
-                } else {
-                    cmd_history(&opts, session)
-                }
-            }
-        },
+        Cmd::Resume { target, prompt } => cmd_resume(&opts, target.clone(), prompt.clone()),
         Cmd::Tui { prompt } => match prompt {
             Some(p) => cmd_oneshot(&opts, None, p.clone()),
             None => run_tui(&opts, None, None),
@@ -382,6 +357,96 @@ fn cmd_models(opts: &Opts) -> i32 {
         Err(e) => {
             eprintln!("{}", e.human());
             1
+        }
+    }
+}
+
+fn cmd_conversations(opts: &Opts) -> i32 {
+    let client = match build_client(opts) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("参数有误：{}", e);
+            return 2;
+        }
+    };
+    match client.conversations(&opts.session) {
+        Ok(list) => {
+            if list.is_empty() {
+                println!("网页左侧栏里没有会话");
+                return 0;
+            }
+            for (i, c) in list.iter().enumerate() {
+                let kind = if c.kind == "c" { "对战" } else { "Agent" };
+                let title = if c.title.trim().is_empty() {
+                    "（无标题）".to_string()
+                } else {
+                    crate::err::truncate(c.title.trim(), 60)
+                };
+                println!("{:>3}. [{}] {}", i + 1, kind, title);
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("{}", e.human());
+            1
+        }
+    }
+}
+
+fn resolve_target(client: &Client, session: &str, raw: &str) -> Result<String, String> {
+    if raw.starts_with("https://") || raw.starts_with("/agent/") || raw.starts_with("/c/") {
+        return Ok(raw.to_string());
+    }
+    let list = client
+        .conversations(session)
+        .map_err(|e| format!("读会话列表失败：{}", e.human()))?;
+    if let Ok(n) = raw.parse::<usize>() {
+        if n >= 1 && n <= list.len() {
+            return Ok(list[n - 1].url.clone());
+        }
+        return Err(format!("编号 {} 超出范围（共 {} 个会话）", n, list.len()));
+    }
+    if let Some(c) = list.iter().find(|c| c.id == raw) {
+        return Ok(c.url.clone());
+    }
+    Err(format!(
+        "没找到会话「{}」：先跑 arena-lite resume 看列表",
+        raw
+    ))
+}
+
+fn cmd_resume(opts: &Opts, target: Option<String>, prompt: Option<String>) -> i32 {
+    let target = match target {
+        Some(t) => t,
+        None => return cmd_conversations(opts),
+    };
+    let client = match build_client(opts) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("参数有误：{}", e);
+            return 2;
+        }
+    };
+    let url = match resolve_target(&client, &opts.session, &target) {
+        Ok(u) => u,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return 1;
+        }
+    };
+    if let Err(e) = client.open(&opts.session, &url) {
+        eprintln!("打开会话失败：{}", e.human());
+        return 1;
+    }
+    match prompt {
+        Some(p) => cmd_oneshot(opts, None, p),
+        None => {
+            if term::is_tty() {
+                let pre = load_history_msgs(opts, &opts.session).unwrap_or_default();
+                run_tui(opts, Some(opts.session.clone()), Some(pre))
+            } else {
+                cmd_history(opts, &opts.session)
+            }
         }
     }
 }
@@ -742,6 +807,7 @@ fn handle_msg(app: &mut App, msg: Msg, out: &mut std::io::Stdout) {
         Msg::Health(res) => app.on_health(res),
         Msg::History(res) => app.on_history(res),
         Msg::SessionList(list) => app.on_session_list(list),
+        Msg::ConversationList(list) => app.on_conversation_list(list),
         Msg::Notice(text) => app.notice(text),
     }
 }
@@ -793,15 +859,15 @@ mod tests {
         assert!(matches!(opts_of(&["health"]).cmd, Cmd::Health));
         assert!(matches!(opts_of(&["models"]).cmd, Cmd::Models));
         match opts_of(&["resume", "设计", "接着聊"]).cmd {
-            Cmd::Resume { session, prompt } => {
-                assert_eq!(session, "设计");
+            Cmd::Resume { target, prompt } => {
+                assert_eq!(target.as_deref(), Some("设计"));
                 assert_eq!(prompt.as_deref(), Some("接着聊"));
             }
             other => panic!("期望 resume，得到 {:?}", other),
         }
         assert!(matches!(
             opts_of(&["resume"]).cmd,
-            Cmd::BadUsage(_)
+            Cmd::Resume { target: None, .. }
         ));
     }
 

@@ -75,9 +75,14 @@ case "$OUT" in
   *) fail "history（拿到：$OUT）" ;;
 esac
 
-echo "== resume（读不到要明确报错、退出码非 0）"
+echo "== resume（按编号打开，找不到要明确报错）"
+OUT=$("$BIN" --base "$BASE" resume 1 2>/dev/null)
+case "$OUT" in
+  *"网页端的第一句"*) pass "resume 按编号打开会话" ;;
+  *) fail "resume 按编号（拿到：$OUT）" ;;
+esac
 "$BIN" --base "$BASE" resume nope "接着聊" >/dev/null 2>&1
-[ $? -ne 0 ] && pass "读不到历史时非 0 退出" || fail "读不到历史时应当非 0 退出"
+[ $? -ne 0 ] && pass "找不到会话时非 0 退出" || fail "找不到会话时应当非 0 退出"
 
 MOCK2_PID=${MOCK2_PID:-0}
 

@@ -133,13 +133,18 @@ def main():
     out.clear()
     read_for(fd, 0.5, out)
 
-    # /resume 载入网页端历史
+    # /resume 列出网页端会话，按编号打开
     out.clear()
-    send(fd, "/resume main\r")
-    read_for(fd, 1.5, out)
+    send(fd, "/resume\r")
+    read_for(fd, 2.5, out)
     screen = strip_ansi("".join(out))
-    check("/resume 载入网页端历史", "这是网页端的第一句" in screen)
-    check("/resume 有载入提示", "已载入会话" in screen)
+    check("/resume 列出网页端会话", "网页端会话" in screen)
+    out.clear()
+    send(fd, "1\r")
+    read_for(fd, 2.0, out)
+    screen = strip_ansi("".join(out))
+    check("/resume 打开并载入历史", "这是网页端的第一句" in screen)
+    check("/resume 有载入提示", "已载入 2 条消息" in screen)
 
     # 流式中断：SLOW 会持续吐 6 秒
     out.clear()

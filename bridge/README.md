@@ -13,7 +13,8 @@
 arena_bridge.js（node，无第三方依赖）
    ├─ POST /v1/chat/completions   OpenAI 兼容，支持 stream
    ├─ POST /ask                   简化接口
-   ├─ GET  /health  /v1/models  /debug  /new
+   ├─ GET  /health  /v1/models  /debug  /new  /conversations  /history
+   ├─ POST /open                   把标签页导航到指定网页端会话
    │
    ├─ CDP → Chrome 9222
    │    ├─ Page.addScriptToEvaluateOnNewDocument 注入拦截脚本

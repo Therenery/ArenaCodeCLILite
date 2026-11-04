@@ -384,7 +384,7 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
         out.push(Line::new(" arena-lite · 终端里的 arena_bridge 客户端", Some(Palette::System)).bold());
         out.push(Line::new("", None));
         for l in wrap(
-            "直接输入问题回车发送。/agent、/direct、/side、/battle 切换常驻模式；/resume 可以载入网页端历史；/help 看全部命令。",
+            "直接输入问题回车发送。/agent、/direct、/side、/battle 切换常驻模式；/resume 打开网页端会话；/help 看全部命令。",
             w.saturating_sub(2).max(10),
         ) {
             out.push(Line::new(format!(" {}", l), Some(Palette::Dim)));
