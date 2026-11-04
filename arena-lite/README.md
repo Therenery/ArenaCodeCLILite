@@ -45,7 +45,7 @@ bash scripts/check.sh        # 编 release + 跑全部单测 + 顺手做一次 W
 | 项 | 状态 |
 | --- | --- |
 | 宿主（x86_64-unknown-linux-gnu）`rustc 1.88.0` 编译 | ✅ 通过，**零警告** |
-| 单元测试 | ✅ **136 个全过**（见第 9 节） |
+| 单元测试 | ✅ **139 个全过**（见第 9 节） |
 | `--target x86_64-pc-windows-gnu` 完整编译（`--emit=obj`，含全部 `cfg(windows)` 分支） | ✅ 通过，零警告，产出 COFF 目标文件 |
 | 链接出 `arena-lite.exe` | ❌ 沙箱里**没做到**：缺 mingw 导入库（`libkernel32.a`/`libuser32.a` 等），而这台机器只允许访问 npm/pypi/github 镜像，拿不到 mingw-w64 工具链。代码没问题（编译到目标文件那一步已经过了），是链接器找不到系统库 |
 | `cargo` | ❌ 沙箱里没有 cargo，也没有 crates.io 网络；本 crate 零依赖，所以用 `rustc` 直编等价 |
@@ -219,6 +219,7 @@ battle / side / direct 模式不显示这一行。
 | `/vote a\|b\|tie\|both` | 对战投票（`POST /vote`） |
 | `/upload <路径[,路径]>` | 上传文件到当前会话（`POST /upload`） |
 | `/reasoning` `/tools` | 展开/折叠思考链 / 工具块 |
+| `/config` `/settings` | 设置面板：语言、Markdown/LaTeX 渲染、思考链与工具块默认展开；`←→` 切页，`Enter` 切换，改完立刻写盘 |
 | `/clear` | 清屏 |
 | `/retry` | 重发上一问（嗯，第 7 条里的「最多重试一次」用完后可以用它手动再来） |
 | `/help` | 命令表 |
@@ -314,7 +315,7 @@ GET  /history?session=<name>
 
 ## 9. 测试
 
-### 单元测试：136 个，`cargo test` 或 `bash scripts/check.sh`
+### 单元测试：139 个，`cargo test` 或 `bash scripts/check.sh`
 
 覆盖要求里点名的四类，且每类都不是走过场：
 

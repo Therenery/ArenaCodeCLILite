@@ -208,6 +208,144 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     rows.truncate(h);
     rows
 }
+/// /config 面板：三个 tab，设置项右对齐显示当前值
+fn panel_lines(app: &App, w: usize) -> Vec<Line> {
+    let p = match &app.panel {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let en = app.set.lang == crate::settings::Lang::En;
+    let tabs: [&str; 3] = if en {
+        ["Settings", "Status", "About"]
+    } else {
+        ["设置", "状态", "关于"]
+    };
+    let mut out: Vec<Line> = Vec::new();
+    let mut bar = String::from(" ");
+    for (i, t) in tabs.iter().enumerate() {
+        if i == p.tab {
+            bar.push_str(&format!("[{}]", t));
+        } else {
+            bar.push_str(&format!(" {} ", t));
+        }
+        bar.push_str("  ");
+    }
+    out.push(Line::new(bar, Some(Palette::Accent)).bold());
+    out.push(Line::new("", None));
+
+    let on_off = |b: bool| -> &'static str {
+        match (b, en) {
+            (true, false) => "开",
+            (false, false) => "关",
+            (true, true) => "on",
+            (false, true) => "off",
+        }
+    };
+
+    match p.tab {
+        0 => {
+            let rows: [(&str, String); 5] = [
+                (
+                    if en { "Language" } else { "语言" },
+                    app.set.lang.label().to_string(),
+                ),
+                (
+                    if en { "Render markdown" } else { "Markdown 渲染" },
+                    on_off(app.set.markdown).to_string(),
+                ),
+                (
+                    if en { "Render LaTeX" } else { "LaTeX 渲染" },
+                    on_off(app.set.latex).to_string(),
+                ),
+                (
+                    if en {
+                        "Expand reasoning by default"
+                    } else {
+                        "思考链默认展开"
+                    },
+                    on_off(app.set.reasoning_open).to_string(),
+                ),
+                (
+                    if en {
+                        "Expand tool blocks by default"
+                    } else {
+                        "工具块默认展开"
+                    },
+                    on_off(app.set.tools_open).to_string(),
+                ),
+            ];
+            for (i, (name, val)) in rows.iter().enumerate() {
+                let sel = i == p.sel;
+                let mark = if sel { " ❯ " } else { "   " };
+                let used = str_width(mark) + str_width(name) + str_width(val);
+                let pad = w.saturating_sub(used + 3).max(2);
+                let text = format!("{}{}{}{}", mark, name, " ".repeat(pad), val);
+                out.push(Line::new(text, Some(if sel { Palette::User } else { Palette::Dim })));
+            }
+        }
+        1 => {
+            let dot = match &app.health {
+                crate::app::HealthState::Up(h) if h.chrome => "●",
+                crate::app::HealthState::Up(_) => "◐",
+                _ => "○",
+            };
+            let rows: [(&str, String); 8] = [
+                ("Version", format!("v{}", crate::VERSION)),
+                (if en { "Mode" } else { "模式" }, app.mode().label().to_string()),
+                (if en { "Model" } else { "模型" }, app.model_label()),
+                (if en { "Repo" } else { "仓库" }, app.repo.clone()),
+                (if en { "Session" } else { "会话" }, app.cfg.session.clone()),
+                (if en { "Bridge" } else { "桥" }, format!("{} {}", app.cfg.base_display, dot)),
+                (
+                    "Chrome",
+                    match &app.health {
+                        crate::app::HealthState::Up(h) if h.chrome => {
+                            if en { "connected" } else { "已连接" }.to_string()
+                        }
+                        _ => if en { "not connected" } else { "未连接" }.to_string(),
+                    },
+                ),
+                (
+                    if en { "Config" } else { "配置" },
+                    crate::settings::config_path().display().to_string(),
+                ),
+            ];
+            for (name, val) in rows.iter() {
+                let used = 3 + str_width(name);
+                let pad = w.saturating_sub(used + str_width(val) + 2).max(2);
+                out.push(Line::new(
+                    format!("   {}{}{}", name, " ".repeat(pad), val),
+                    Some(Palette::Dim),
+                ));
+            }
+        }
+        _ => {
+            out.push(Line::new(
+                format!(" Arena Code  v{}", crate::VERSION),
+                Some(Palette::Accent),
+            ).bold());
+            out.push(Line::new("", None));
+            out.push(Line::new(
+                if en {
+                    " Terminal client for arena_bridge. No third-party crates, single binary."
+                } else {
+                    " arena_bridge 的终端客户端，零第三方依赖，单二进制。"
+                },
+                Some(Palette::Dim),
+            ));
+            out.push(Line::new(
+                " https://github.com/Therenery/ArenaCodeCLILite",
+                Some(Palette::Dim),
+            ));
+            out.push(Line::new(
+                format!(" {}", crate::settings::config_path().display()),
+                Some(Palette::Dim),
+            ));
+        }
+    }
+    out
+}
+
 /// 顶部：LOGO + 右边几行信息，像 Claude Code 的 banner，不加框
 fn header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
     let logo = theme::logo_ansi(th);
@@ -571,6 +709,16 @@ fn window(len: usize, sel: usize, max: usize) -> (usize, usize) {
 
 fn hint_row(app: &App, w: usize, th: &Theme) -> Row {
     let mut row = Row::new();
+    if app.panel.is_some() {
+        let en = app.set.lang == crate::settings::Lang::En;
+        let hint = if en {
+            "  ↑↓ select · ←→ tab · Enter toggle · Esc close"
+        } else {
+            "  ↑↓ 选择 · ←→ 切页 · Enter 切换 · Esc 关闭"
+        };
+        row.push(th, hint, Some(Palette::Dim), false);
+        return row;
+    }
     if app.picker.is_some() || app.repo_mode() || !app.suggestions().is_empty() {
         row.push(th, "  Enter to confirm · Esc to cancel", Some(Palette::Dim), false);
         return row;
@@ -583,12 +731,24 @@ fn hint_row(app: &App, w: usize, th: &Theme) -> Row {
         }
     }
     let mode = app.mode().label();
-    let mut hint = format!("  ⏵⏵ {} · Enter 发送 · Shift+Enter 换行 · /help · Ctrl+C 退出", mode);
+    let mut hint = if app.set.lang == crate::settings::Lang::En {
+        format!("  ⏵⏵ {} · Enter send · Shift+Enter newline · /help · Ctrl+C quit", mode)
+    } else {
+        format!("  ⏵⏵ {} · Enter 发送 · Shift+Enter 换行 · /help · Ctrl+C 退出", mode)
+    };
     if app.busy() {
-        hint = format!("  ⏵⏵ {} · 生成中 · Ctrl+C 中断本轮", mode);
+        hint = if app.set.lang == crate::settings::Lang::En {
+            format!("  ⏵⏵ {} · generating · Ctrl+C interrupts", mode)
+        } else {
+            format!("  ⏵⏵ {} · 生成中 · Ctrl+C 中断本轮", mode)
+        };
     }
     if str_width(&hint) > w {
-        hint = format!("  ⏵⏵ {} · /help · Ctrl+C 退出", mode);
+        hint = if app.set.lang == crate::settings::Lang::En {
+            format!("  ⏵⏵ {} · /help · Ctrl+C quit", mode)
+        } else {
+            format!("  ⏵⏵ {} · /help · Ctrl+C 退出", mode)
+        };
     }
     row.push(th, &hint, Some(Palette::Dim), false);
     row
@@ -630,7 +790,7 @@ fn input_rows(
         }
         if app.input.is_empty() {
             if i == 0 {
-                row.push(th, "输入消息…", Some(Palette::Dim), false);
+                row.push(th, tr(app, "输入消息…", "Type a message…"), Some(Palette::Dim), false);
                 cur_pos = Some((1 + i, 3));
             }
         } else if let Some(text) = lines.get(idx) {
@@ -662,16 +822,34 @@ fn cursor_width(input: &str, cursor: usize, avail: usize) -> usize {
 
 /* ------------------------------ 对话区 ------------------------------ */
 
+/// 中英二选一：按设置返回对应文案
+fn tr<'a>(app: &App, zh: &'a str, en: &'a str) -> &'a str {
+    if app.set.lang == crate::settings::Lang::En {
+        en
+    } else {
+        zh
+    }
+}
+
 fn build_lines(app: &App, w: usize) -> Vec<Line> {
+    if app.panel.is_some() {
+        return panel_lines(app, w);
+    }
     let mut out: Vec<Line> = Vec::new();
     if app.blocks.is_empty() {
         out.push(Line::new("", None));
-        out.push(Line::new(" Tips for getting started:", Some(Palette::Dim)).bold());
+        out.push(
+            Line::new(
+                format!(" {}", tr(app, "上手三步：", "Tips for getting started:")),
+                Some(Palette::Dim),
+            )
+            .bold(),
+        );
         out.push(Line::new("", None));
         let tips = [
-            "直接输入问题，Enter 发送；Shift+Enter 换行",
-            "/resume 打开网页端会话，/sessions 看桥上的会话",
-            "/agent /direct /side /battle 切模式，/help 看全部命令",
+            tr(app, "直接输入问题，Enter 发送；Shift+Enter 换行", "Type a question, Enter to send; Shift+Enter for a new line"),
+            tr(app, "/resume 打开网页端会话，/sessions 看桥上的会话", "/resume opens web conversations, /sessions lists bridge tabs"),
+            tr(app, "/agent /direct /side /battle 切模式，/help 看全部命令", "/agent /direct /side /battle switch modes, /help lists commands"),
         ];
         for (i, t) in tips.iter().enumerate() {
             for (j, l) in wrap(t, w.saturating_sub(6).max(10)).iter().enumerate() {
@@ -704,15 +882,16 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
                     // 还在等第一个字：正文先留空，等待中的状态由状态栏 spinner 表达
                     continue;
                 }
-                push_prefixed(
-                    &mut out,
-                    &crate::width::sanitize(text),
-                    BOT_PREFIX,
-                    8,
-                    w,
-                    Palette::Assistant,
-                    false,
-                );
+                if app.set.markdown {
+                    out.extend(md_lines(text, w, app.set.latex));
+                } else {
+                    let body = if app.set.latex {
+                        latex_plain(text)
+                    } else {
+                        crate::width::sanitize(text)
+                    };
+                    push_prefixed(&mut out, &body, BOT_PREFIX, 8, w, Palette::Assistant, false);
+                }
             }
             Block::Reasoning { text, lines } => {
                 let n = (*lines).max(text.split('\n').count());
@@ -815,6 +994,232 @@ fn push_prefixed(
     }
 }
 
+/* ------------------------------ markdown ------------------------------ */
+
+fn sym(name: &str) -> &'static str {
+    match name {
+        "alpha" => "α",
+        "beta" => "β",
+        "gamma" => "γ",
+        "delta" => "δ",
+        "epsilon" => "ε",
+        "zeta" => "ζ",
+        "eta" => "η",
+        "theta" => "θ",
+        "kappa" => "κ",
+        "lambda" => "λ",
+        "mu" => "μ",
+        "nu" => "ν",
+        "xi" => "ξ",
+        "pi" => "π",
+        "rho" => "ρ",
+        "sigma" => "σ",
+        "tau" => "τ",
+        "phi" => "φ",
+        "chi" => "χ",
+        "psi" => "ψ",
+        "omega" => "ω",
+        "Gamma" => "Γ",
+        "Delta" => "Δ",
+        "Theta" => "Θ",
+        "Lambda" => "Λ",
+        "Pi" => "Π",
+        "Sigma" => "Σ",
+        "Phi" => "Φ",
+        "Psi" => "Ψ",
+        "Omega" => "Ω",
+        "times" => "×",
+        "div" => "÷",
+        "pm" => "±",
+        "le" | "leq" => "≤",
+        "ge" | "geq" => "≥",
+        "ne" | "neq" => "≠",
+        "approx" => "≈",
+        "equiv" => "≡",
+        "infty" => "∞",
+        "sum" => "∑",
+        "prod" => "∏",
+        "int" => "∫",
+        "sqrt" => "√",
+        "to" | "rightarrow" => "→",
+        "leftarrow" => "←",
+        "Rightarrow" => "⇒",
+        "Leftarrow" => "⇐",
+        "in" => "∈",
+        "notin" => "∉",
+        "cdot" => "·",
+        "ldots" | "dots" => "…",
+        "quad" => " ",
+        _ => "",
+    }
+}
+
+fn sup(c: char) -> Option<char> {
+    Some(match c {
+        '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
+        '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
+        'n' => 'ⁿ', 'i' => 'ⁱ', 'x' => 'ˣ', '+' => '⁺', '-' => '⁻',
+        _ => return None,
+    })
+}
+
+fn sub(c: char) -> Option<char> {
+    Some(match c {
+        '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
+        '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
+        'a' => 'ₐ', 'e' => 'ₑ', 'i' => 'ᵢ', 'o' => 'ₒ', 'x' => 'ₓ', 'n' => 'ₙ',
+        _ => return None,
+    })
+}
+
+fn take_group(chars: &[char], mut i: usize) -> (String, usize) {
+    if i < chars.len() && chars[i] == '{' {
+        let mut s = String::new();
+        i += 1;
+        while i < chars.len() && chars[i] != '}' {
+            s.push(chars[i]);
+            i += 1;
+        }
+        if i < chars.len() {
+            i += 1;
+        }
+        return (s, i);
+    }
+    if i < chars.len() {
+        return (chars[i].to_string(), i + 1);
+    }
+    (String::new(), i)
+}
+
+/// 把 $...$ 里的 LaTeX 换成能看的 Unicode：\alpha → α、\frac{a}{b} → a/b、x^2 → x²
+fn latex_plain(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        match chars[i] {
+            '$' => i += 1,
+            '\\' => {
+                i += 1;
+                let mut name = String::new();
+                while i < chars.len() && chars[i].is_ascii_alphabetic() {
+                    name.push(chars[i]);
+                    i += 1;
+                }
+                if name.is_empty() {
+                    if i < chars.len() {
+                        out.push(chars[i]);
+                        i += 1;
+                    }
+                    continue;
+                }
+                if name == "frac" {
+                    let (a, ni) = take_group(&chars, i);
+                    let (b, ni2) = take_group(&chars, ni);
+                    out.push_str(&format!("{}/{}", a, b));
+                    i = ni2;
+                    continue;
+                }
+                out.push_str(sym(&name));
+            }
+            '^' | '_' => {
+                let up = chars[i] == '^';
+                i += 1;
+                let mut ch = None;
+                if i < chars.len() && chars[i] == '{' {
+                    if i + 1 < chars.len() {
+                        ch = Some(chars[i + 1]);
+                    }
+                    i += 3;
+                } else if i < chars.len() {
+                    ch = Some(chars[i]);
+                    i += 1;
+                }
+                if let Some(x) = ch {
+                    let mapped = if up { sup(x) } else { sub(x) };
+                    out.push(mapped.unwrap_or(x));
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// 去掉行内标记（**、__、反引号），需要时顺手把 LaTeX 换掉
+fn strip_inline(s: &str, latex: bool) -> String {
+    let mut t = s.replace("**", "").replace("__", "");
+    t = t.replace('\u{60}', "");
+    if latex {
+        t = latex_plain(&t);
+    }
+    t
+}
+
+/// 助手正文按 markdown 走一遍：标题加粗、列表加 •、代码块变暗、行内标记去掉
+fn md_lines(text: &str, w: usize, latex: bool) -> Vec<Line> {
+    let clean = crate::width::sanitize(text);
+    let mut parts: Vec<(String, Option<Palette>, bool)> = Vec::new();
+    let mut fence = false;
+    for raw in clean.split('\n') {
+        let line = raw.trim_end();
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("\u{60}\u{60}\u{60}") {
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            parts.push((line.to_string(), Some(Palette::Dim), false));
+            continue;
+        }
+        if trimmed.is_empty() {
+            parts.push((String::new(), None, false));
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            let t = trimmed.trim_start_matches('#').trim();
+            parts.push((strip_inline(t, latex), Some(Palette::Assistant), true));
+        } else if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            parts.push((
+                format!("• {}", strip_inline(rest, latex)),
+                Some(Palette::Assistant),
+                false,
+            ));
+        } else if let Some(rest) = trimmed.strip_prefix("> ") {
+            parts.push((
+                format!("│ {}", strip_inline(rest, latex)),
+                Some(Palette::Dim),
+                false,
+            ));
+        } else {
+            parts.push((strip_inline(line, latex), Some(Palette::Assistant), false));
+        }
+    }
+
+    let indent = 8usize;
+    let body_w = w.saturating_sub(indent + 1).max(8);
+    let mut out: Vec<Line> = Vec::new();
+    for (i, (t, pal, bold)) in parts.iter().enumerate() {
+        if t.is_empty() {
+            out.push(Line::new("", None));
+            continue;
+        }
+        for (j, l) in wrap(t, body_w).iter().enumerate() {
+            let prefix = if i == 0 && j == 0 { BOT_PREFIX } else { "        " };
+            let mut line = Line::new(format!("{}{}", prefix, l), *pal);
+            line.bold = *bold;
+            out.push(line);
+        }
+    }
+    out
+}
+
 /// 工具参数的一行摘要：优先取第一个字符串值
 fn tool_summary(input: &str) -> String {
     let input = input.trim();
@@ -881,7 +1286,7 @@ mod tests {
         let base = crate::httpc::parse_base("127.0.0.1:17892").expect("base");
         let client = Arc::new(Client::new(base, None));
         let (tx, _rx) = mpsc::channel();
-        App::new(
+        let mut a = App::new(
             client,
             tx,
             Config {
@@ -892,7 +1297,11 @@ mod tests {
                 reasoning_open: false,
                 logo: true,
             },
-        )
+        );
+        // 测试不能吃用户真实配置（本机可能已经切成英文）
+        a.set = crate::settings::Settings::default();
+        a.show_reasoning = false;
+        a
     }
 
     fn strip_ansi(s: &str) -> String {
@@ -958,7 +1367,7 @@ mod tests {
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
         assert!(joined.contains("Arena Code"), "缺少标题");
-        assert!(joined.contains("v2.0.5"), "缺少版本号");
+        assert!(joined.contains("v2.0.6"), "缺少版本号");
         assert!(joined.contains("agent · arena-agent"), "缺少模式·模型");
         assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
         assert!(!joined.contains('┌'), "不该再画框了");
@@ -1082,6 +1491,26 @@ mod tests {
             .expect("找不到输入行");
         assert!(input < first, "仓库列表应该挂在输入框下面");
         assert!(text.contains("Enter to confirm"), "底部没提示按键");
+    }
+
+    #[test]
+    fn latex_turns_into_readable_symbols() {
+        assert_eq!(latex_plain("\\alpha + \\beta"), "α + β");
+        assert_eq!(latex_plain("\\frac{a}{b}"), "a/b");
+        assert_eq!(latex_plain("x^2 + y_1"), "x² + y₁");
+        assert_eq!(latex_plain("$E = mc^2$"), "E = mc²");
+    }
+
+    #[test]
+    fn markdown_strips_markers_and_keeps_structure() {
+        let lines = md_lines("## 标题\n- 一条 **重点**\n\u{60}\u{60}\u{60}rs\nfn main() {}\n\u{60}\u{60}\u{60}", 60, false);
+        let text: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
+        let joined = text.join("\n");
+        assert!(joined.contains("arena ❯ 标题"), "标题该带前缀");
+        assert!(joined.contains("• 一条 重点"), "列表要点 + 去掉粗体标记");
+        assert!(!joined.contains("**"), "不该留 markdown 标记");
+        assert!(joined.contains("fn main()"), "代码块内容要保留");
+        assert!(lines.iter().any(|l| l.bold), "标题该加粗");
     }
 
     #[test]

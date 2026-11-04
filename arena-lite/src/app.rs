@@ -70,6 +70,12 @@ pub struct Config {
     pub logo: bool,
 }
 
+/// /config 面板：三个 tab，↑↓ 选行，←→ 换 tab
+pub struct Panel {
+    pub tab: usize,
+    pub sel: usize,
+}
+
 /// 选择列表：/resume 的网页会话、/sessions 的桥会话都用它
 pub struct Picker {
     pub kind: PickKind,
@@ -158,6 +164,10 @@ pub struct App {
 
     /// 输入框上方弹出的选择列表（/resume、/sessions）
     pub picker: Option<Picker>,
+    /// /config 面板
+    pub panel: Option<Panel>,
+    /// 用户偏好（语言、渲染开关），改了就落盘
+    pub set: crate::settings::Settings,
     /// 命令补全列表里高亮到第几个
     pub suggest_sel: usize,
     /// 当前仓库（agent 模式下常驻显示在顶部）
@@ -169,7 +179,8 @@ pub struct App {
 
 impl App {
     pub fn new(client: Arc<Client>, tx: Sender<Msg>, cfg: Config) -> App {
-        let show_reasoning = cfg.reasoning_open;
+        let set = crate::settings::Settings::load();
+        let show_reasoning = cfg.reasoning_open || set.reasoning_open;
         App {
             client,
             tx,
@@ -188,6 +199,8 @@ impl App {
             cursor_at: None,
             hit_top: 0,
             hit_rows: Vec::new(),
+            panel: None,
+            set,
             health: HealthState::Unknown,
             stream: None,
             notice: None,
@@ -283,7 +296,7 @@ impl App {
         self.blocks.push(Block::Tool {
             name,
             input,
-            open: true,
+            open: self.set.tools_open,
         });
     }
 
@@ -455,6 +468,40 @@ impl App {
             self.scroll_top = self.scroll_top.saturating_add(n);
         }
         self.follow = false;
+        self.dirty = true;
+    }
+
+    /* ------------------------------ /config 面板 ------------------------------ */
+
+    pub fn open_panel(&mut self) {
+        self.panel = Some(Panel { tab: 0, sel: 0 });
+        self.dirty = true;
+    }
+
+    pub fn close_panel(&mut self) {
+        self.panel = None;
+        self.dirty = true;
+    }
+
+    /// 改一项设置并立刻落盘
+    pub fn toggle_setting(&mut self, i: usize) {
+        match i {
+            0 => {
+                self.set.lang = match self.set.lang {
+                    crate::settings::Lang::Zh => crate::settings::Lang::En,
+                    crate::settings::Lang::En => crate::settings::Lang::Zh,
+                }
+            }
+            1 => self.set.markdown = !self.set.markdown,
+            2 => self.set.latex = !self.set.latex,
+            3 => {
+                self.set.reasoning_open = !self.set.reasoning_open;
+                self.show_reasoning = self.set.reasoning_open;
+            }
+            4 => self.set.tools_open = !self.set.tools_open,
+            _ => return,
+        }
+        let _ = self.set.save();
         self.dirty = true;
     }
 
@@ -1063,6 +1110,7 @@ impl App {
                     "工具块已折叠"
                 });
             }
+            "/config" | "/settings" => self.open_panel(),
             "/clear" => {
                 self.blocks.clear();
                 self.notice("屏幕已清空（服务端上下文保留）");
@@ -1244,6 +1292,7 @@ impl App {
             ("/agent", "常驻 agent 模式"),
             ("/battle", "两栏对战"),
             ("/clear", "清屏"),
+            ("/config", "设置面板"),
             ("/direct", "直连模式"),
             ("/exit", "退出"),
             ("/health", "看桥的状态"),
@@ -1313,6 +1362,46 @@ impl App {
     }
 
     fn handle_key_inner(&mut self, k: Key) {
+        // 面板开着就只认面板的键
+        if self.panel.is_some() {
+            let mut act = 0u8; // 1 = 切换开关，2 = 关闭
+            let mut sel = 0usize;
+            if let Some(p) = self.panel.as_mut() {
+                let rows = if p.tab == 0 { 5 } else { 0 };
+                match k {
+                    Key::Up => p.sel = p.sel.saturating_sub(1),
+                    Key::Down => {
+                        if rows > 0 {
+                            p.sel = (p.sel + 1).min(rows - 1);
+                        }
+                    }
+                    Key::Left | Key::BackTab => {
+                        p.tab = (p.tab + 2) % 3;
+                        p.sel = 0;
+                    }
+                    Key::Right | Key::Tab => {
+                        p.tab = (p.tab + 1) % 3;
+                        p.sel = 0;
+                    }
+                    Key::Enter => {
+                        if p.tab == 0 {
+                            act = 1;
+                        }
+                    }
+                    Key::Esc | Key::Ctrl('c') => act = 2,
+                    _ => {}
+                }
+                sel = p.sel;
+            }
+            self.dirty = true;
+            if act == 1 {
+                self.toggle_setting(sel);
+            } else if act == 2 {
+                self.close_panel();
+            }
+            return;
+        }
+
         // 仓库候选：上下键直接填进输入框
         if self.repo_picking() {
             let n = self.repo_list.len();
@@ -1600,7 +1689,11 @@ mod tests {
             reasoning_open: false,
             logo: true,
         };
-        App::new(client, tx, cfg)
+        let mut a = App::new(client, tx, cfg);
+        // 测试不能吃用户真实配置（本机可能已经切成英文）
+        a.set = crate::settings::Settings::default();
+        a.show_reasoning = false;
+        a
     }
 
     #[test]

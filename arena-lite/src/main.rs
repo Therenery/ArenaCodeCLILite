@@ -12,6 +12,7 @@ mod httpc;
 mod json;
 mod keys;
 mod mode;
+mod settings;
 mod sse;
 mod term;
 mod theme;
@@ -32,7 +33,7 @@ use httpc::Base;
 use mode::Mode;
 use theme::{Palette, Theme};
 
-const VERSION: &str = "2.0.5";
+pub const VERSION: &str = "2.0.6";
 const DEFAULT_BASE: &str = "127.0.0.1:17892";
 
 /* ------------------------------ 参数 ------------------------------ */
