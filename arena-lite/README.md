@@ -166,14 +166,14 @@ battle / side / direct 模式不显示这一行。
 
 `/resume`、`/sessions` 是弹出式选择器：↑↓ 选、Enter 确认、Esc 取消。
 
-`/repo` 更省一步——敲到 `/repo` 的那一刻就去拉仓库名，不用回车，列表直接从输入框上面冒出来，当前仓库带 `← 当前`：
+`/repo` 更省一步——敲到 `/repo` 的那一刻就去拉仓库名，不用回车，列表直接从输入框下面冒出来，当前仓库带 `← 当前`：
 
 ```
-❯ owner/repo  ← 当前
-  other/thing
 ──────────────────────────────────────────────
 ❯ /repo
 ──────────────────────────────────────────────
+❯ owner/repo  ← 当前
+  other/thing
   Enter to confirm · Esc to cancel
 ```
 
@@ -211,7 +211,7 @@ battle / side / direct 模式不显示这一行。
 | `/sessions` | 列出桥当前的标签页（调试用，不载入） |
 | `/new` | 清空服务端会话（`GET /new`） |
 | `/health` | 体检桥（`GET /health`） |
-| `/repo` | 边打边列仓库：输入框上方直接出列表，↑↓ 选、选中即填入、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
+| `/repo` | 边打边列仓库：输入框下方直接出列表，↑↓ 选、选中即填入、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
 | `/vote a\|b\|tie\|both` | 对战投票（`POST /vote`） |
 | `/upload <路径[,路径]>` | 上传文件到当前会话（`POST /upload`） |
 | `/reasoning` `/tools` | 展开/折叠思考链 / 工具块 |

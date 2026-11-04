@@ -124,7 +124,7 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
         1
     };
 
-    // 输入框上方的候选列表（命令补全 / 会话选择）
+    // 输入框下方的候选列表（命令补全 / 会话选择 / 仓库）
     let list = list_rows(app, w, th);
     let avail_chat = h
         .saturating_sub(header_h + list.len() + input_h + 3)
@@ -169,10 +169,11 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     for row in chat_rows {
         rows.push(row.styled);
     }
-    rows.extend(list);
     for row in input_rows(app, w, input_h, th) {
         rows.push(row);
     }
+    // 候选列表挂在输入框下面，视线跟着光标走
+    rows.extend(list);
     rows.push(hint_row(app, w, th).styled);
 
     // 底部留白要真的清干净，否则会残留上一帧
@@ -1038,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn command_suggestions_render_above_input() {
+    fn command_suggestions_render_below_input() {
         let mut a = app(Mode::Agent);
         a.input = "/re".to_string();
         a.cursor = 3;
@@ -1054,11 +1055,11 @@ mod tests {
             .iter()
             .position(|l| l.trim_end() == "❯ /re")
             .expect("找不到输入行");
-        assert!(sel < input, "候选应该在输入框上面");
+        assert!(input < sel, "候选应该挂在输入框下面");
     }
 
     #[test]
-    fn repo_list_shows_above_input_and_marks_current() {
+    fn repo_list_shows_below_input_and_marks_current() {
         let mut a = app(Mode::Agent);
         a.input = "/repo".to_string();
         a.cursor = 5;
@@ -1080,7 +1081,7 @@ mod tests {
             .iter()
             .position(|l| l.trim_end() == "❯ /repo")
             .expect("找不到输入行");
-        assert!(first < input, "仓库列表应该在输入框上面");
+        assert!(input < first, "仓库列表应该挂在输入框下面");
         assert!(text.contains("Enter to confirm"), "底部没提示按键");
     }
 
