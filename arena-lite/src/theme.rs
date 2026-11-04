@@ -131,17 +131,26 @@ pub const LOGO_LINES: [&str; 6] = [
     r"╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝",
 ];
 
-/// 两级着色：主体青蓝 45，最底一行阴影压暗到 31
+/// 逐行渐变：青 → 天蓝 → 藕荷（照 Claude/Qwen 那条 #5FD7D7 → #57B8E8 → #8A8CF8），
+/// 最后一行压成暗紫当阴影，保留立体感。
+pub const LOGO_GRADIENT: [&str; 6] = [
+    "38;5;80",  // #5FD7D7 青
+    "38;5;80",
+    "38;5;75",  // #57B8E8 天蓝
+    "38;5;75",
+    "38;5;105", // #8A8CF8 藕荷
+    "38;5;60",  // 阴影
+];
+
 pub fn logo_ansi(theme: &Theme) -> Vec<String> {
     if !theme.enabled {
         return LOGO_LINES.iter().map(|s| s.to_string()).collect();
     }
-    let last = LOGO_LINES.len() - 1;
     LOGO_LINES
         .iter()
         .enumerate()
         .map(|(i, line)| {
-            let code = if i == last { "38;5;31" } else { "38;5;45" };
+            let code = LOGO_GRADIENT[i.min(LOGO_GRADIENT.len() - 1)];
             format!("\x1b[{}m{}\x1b[0m", code, line)
         })
         .collect()

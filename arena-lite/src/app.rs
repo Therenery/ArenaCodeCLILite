@@ -68,6 +68,50 @@ pub struct Config {
     pub logo: bool,
 }
 
+/// 选择列表：/resume 的网页会话、/sessions 的桥会话都用它
+pub struct Picker {
+    pub kind: PickKind,
+    pub title: String,
+    pub items: Vec<String>,
+    pub values: Vec<String>,
+    pub sel: usize,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum PickKind {
+    Conversation,
+    Session,
+}
+
+impl Picker {
+    pub fn new(kind: PickKind, title: impl Into<String>, rows: Vec<(String, String)>) -> Picker {
+        let (items, values) = rows.into_iter().unzip();
+        Picker {
+            kind,
+            title: title.into(),
+            items,
+            values,
+            sel: 0,
+        }
+    }
+
+    pub fn down(&mut self) {
+        if !self.items.is_empty() {
+            self.sel = (self.sel + 1) % self.items.len();
+        }
+    }
+
+    pub fn up(&mut self) {
+        if !self.items.is_empty() {
+            self.sel = (self.sel + self.items.len() - 1) % self.items.len();
+        }
+    }
+
+    pub fn current(&self) -> Option<(PickKind, String)> {
+        self.values.get(self.sel).map(|v| (self.kind, v.clone()))
+    }
+}
+
 pub struct App {
     pub client: Arc<Client>,
     pub tx: Sender<Msg>,
@@ -104,6 +148,11 @@ pub struct App {
     pub conversations: Vec<Conversation>,
     pub pending_pick: Option<Vec<String>>,
     pub last_prompt: Option<String>,
+
+    /// 输入框上方弹出的选择列表（/resume、/sessions）
+    pub picker: Option<Picker>,
+    /// 命令补全列表里高亮到第几个
+    pub suggest_sel: usize,
 }
 
 impl App {
@@ -135,6 +184,8 @@ impl App {
             conversations: Vec::new(),
             pending_pick: None,
             last_prompt: None,
+            picker: None,
+            suggest_sel: 0,
         }
     }
 
@@ -386,6 +437,16 @@ impl App {
             self.notice("正在生成，先 Ctrl+C 中断再发");
             return;
         }
+        // 命令补全列表开着的时候，回车 = 执行高亮的那条
+        let sug = self.suggestions();
+        if !sug.is_empty() {
+            let i = self.suggest_index(sug.len());
+            let cmd = sug[i].0;
+            if cmd != self.input.trim() {
+                self.set_input(cmd.to_string());
+            }
+            self.suggest_sel = 0;
+        }
         let raw = self.input.trim().to_string();
         if raw.is_empty() {
             return;
@@ -575,8 +636,8 @@ impl App {
             self.push_system("桥上没有打开的会话（先随便问一句，会话才会建起来）");
             return;
         }
-        self.push_system("桥上的标签页（要打开网页端会话请用 /resume）：");
-        for (i, s) in list.iter().enumerate() {
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for s in list.iter() {
             let when = s.at.map(format_relative).unwrap_or_else(|| "时间未知".into());
             let last = if s.last.trim().is_empty() {
                 "（空会话）".to_string()
@@ -588,17 +649,14 @@ impl App {
                 None => String::new(),
             };
             let mark = if s.name == self.cfg.session { "  ← 当前" } else { "" };
-            self.push_system(format!(
-                "  {}. {}  ·  {} 条 · {}  ·  {}{}{}",
-                i + 1,
-                s.name,
-                s.turns,
-                when,
-                last,
-                extra,
-                mark
+            rows.push((
+                format!("{}  ·  {} 条 · {}  ·  {}{}{}", s.name, s.turns, when, last, extra, mark),
+                s.name.clone(),
             ));
         }
+        self.picker = Some(Picker::new(PickKind::Session, "桥上的会话", rows));
+        self.notice("↑↓ 选会话，Enter 切过去，Esc 取消");
+        self.dirty = true;
     }
 
     pub fn on_conversation_list(&mut self, list: Vec<Conversation>) {
@@ -609,15 +667,30 @@ impl App {
             self.pending_pick = None;
             return;
         }
-        self.push_system("网页端会话（输入编号打开）：");
-        for (i, c) in list.iter().enumerate() {
-            let kind = if c.kind == "c" { "对战" } else { "Agent" };
-            let title = if c.title.trim().is_empty() {
-                "（无标题）".to_string()
-            } else {
-                truncate(c.title.trim(), 50)
-            };
-            self.push_system(format!("  {}. [{}] {}", i + 1, kind, title));
+        let rows: Vec<(String, String)> = list
+            .iter()
+            .map(|c| {
+                let kind = if c.kind == "c" { "对战" } else { "Agent" };
+                let title = if c.title.trim().is_empty() {
+                    "（无标题）".to_string()
+                } else {
+                    truncate(c.title.trim(), 50)
+                };
+                (format!("[{}] {}", kind, title), c.url.clone())
+            })
+            .collect();
+        self.picker = Some(Picker::new(PickKind::Conversation, "网页端会话", rows));
+        self.notice("↑↓ 选会话，Enter 打开，Esc 取消");
+        self.dirty = true;
+    }
+
+    fn pick_value(&mut self, kind: PickKind, value: String) {
+        match kind {
+            PickKind::Conversation => self.open_conversation(&value),
+            PickKind::Session => {
+                self.cfg.session = value.clone();
+                self.notice(format!("会话已切到 {}", value));
+            }
         }
     }
 
@@ -1012,37 +1085,69 @@ impl App {
 
     /* ------------------------------ Tab 补全 ------------------------------ */
 
-    pub fn slash_commands() -> &'static [&'static str] {
+    /// 命令表：名字 + 一句说明，补全列表和 /help 共用
+    pub fn slash_help() -> &'static [(&'static str, &'static str)] {
         &[
-            "/agent", "/battle", "/clear", "/direct", "/exit", "/health", "/help", "/mode",
-            "/models", "/new", "/quit", "/reasoning", "/repo", "/repos", "/resume", "/retry",
-            "/session", "/sessions", "/side", "/tools", "/upload", "/vote",
+            ("/agent", "常驻 agent 模式"),
+            ("/battle", "两栏对战"),
+            ("/clear", "清屏"),
+            ("/direct", "直连模式"),
+            ("/exit", "退出"),
+            ("/health", "看桥的状态"),
+            ("/help", "全部命令"),
+            ("/mode", "切模式"),
+            ("/models", "设模型"),
+            ("/new", "清空当前会话"),
+            ("/quit", "退出"),
+            ("/reasoning", "思考链展开/收起"),
+            ("/repo", "换仓库"),
+            ("/repos", "列仓库"),
+            ("/resume", "打开网页端会话"),
+            ("/retry", "重发上一句"),
+            ("/session", "切会话名"),
+            ("/sessions", "列桥上的会话"),
+            ("/side", "旁路模式"),
+            ("/tools", "工具块展开/收起"),
+            ("/upload", "上传文件"),
+            ("/vote", "对战投票"),
         ]
     }
 
-    pub fn complete(&mut self) {
+    /// 输入框里正在打 / 命令时的候选（只认「/ 开头且还没有空格」）
+    pub fn suggestions(&self) -> Vec<(&'static str, &'static str)> {
         if !self.input.starts_with('/') || self.input.contains(' ') {
-            return;
+            return Vec::new();
         }
-        let matches: Vec<&'static str> = Self::slash_commands()
+        Self::slash_help()
             .iter()
             .copied()
-            .filter(|c| c.starts_with(self.input.as_str()))
-            .collect();
+            .filter(|(c, _)| c.starts_with(self.input.as_str()))
+            .collect()
+    }
+
+    /// 当前高亮的候选下标（越界就夹回最后一个）
+    pub fn suggest_index(&self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            self.suggest_sel.min(n - 1)
+        }
+    }
+
+    pub fn complete(&mut self) {
+        let matches = self.suggestions();
         match matches.len() {
             0 => self.notice("没有匹配的命令"),
             1 => {
-                let done = format!("{} ", matches[0]);
+                let done = format!("{} ", matches[0].0);
                 self.set_input(done);
+                self.suggest_sel = 0;
             }
-            _ => {
-                // 补到公共前缀
-                let common = common_prefix(&matches);
-                if common.len() > self.input.len() {
-                    self.set_input(common);
-                } else {
-                    self.notice(matches.join("  "));
-                }
+            n => {
+                let i = self.suggest_index(n);
+                let done = format!("{} ", matches[i].0);
+                self.set_input(done);
+                self.suggest_sel = 0;
             }
         }
     }
@@ -1050,6 +1155,70 @@ impl App {
     /* ------------------------------ 主循环入口 ------------------------------ */
 
     pub fn handle_key(&mut self, k: Key) {
+        // 选择列表优先吃掉按键
+        if self.picker.is_some() {
+            let mut pick: Option<Option<(PickKind, String)>> = None;
+            if let Some(p) = self.picker.as_mut() {
+                match k {
+                    Key::Up => p.up(),
+                    Key::Down => p.down(),
+                    Key::PageUp => {
+                        for _ in 0..5 {
+                            p.up();
+                        }
+                    }
+                    Key::PageDown => {
+                        for _ in 0..5 {
+                            p.down();
+                        }
+                    }
+                    Key::Enter => pick = Some(p.current()),
+                    Key::Esc | Key::Ctrl('c') => pick = Some(None),
+                    _ => {}
+                }
+            }
+            self.dirty = true;
+            if let Some(choice) = pick {
+                self.picker = None;
+                match choice {
+                    Some((kind, v)) => self.pick_value(kind, v),
+                    None => self.notice("已取消"),
+                }
+            }
+            return;
+        }
+
+        // 命令补全列表：上下选，Tab 补进去，Enter 直接执行选中的
+        let sug = self.suggestions();
+        if !sug.is_empty() {
+            match k {
+                Key::Up => {
+                    self.suggest_sel = self.suggest_sel.saturating_sub(1);
+                    self.dirty = true;
+                    return;
+                }
+                Key::Down => {
+                    let i = self.suggest_index(sug.len());
+                    if i + 1 < sug.len() {
+                        self.suggest_sel = i + 1;
+                    }
+                    self.dirty = true;
+                    return;
+                }
+                Key::Tab => {
+                    self.complete();
+                    self.dirty = true;
+                    return;
+                }
+                Key::Esc => {
+                    self.clear_input();
+                    self.suggest_sel = 0;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match k {
             Key::Ctrl('c') => {
                 if self.busy() {
@@ -1099,27 +1268,14 @@ impl App {
                 }
             }
             Key::Tab => self.complete(),
-            Key::Esc => self.clear_input(),
+            Key::Esc => {
+                self.clear_input();
+                self.suggest_sel = 0;
+            }
             Key::Char(c) => self.insert_char(c),
             Key::BackTab | Key::Ignored | Key::Ctrl(_) => {}
         }
     }
-}
-
-fn common_prefix(items: &[&'static str]) -> String {
-    let mut out = match items.first() {
-        Some(f) => f.to_string(),
-        None => return String::new(),
-    };
-    for it in items.iter().skip(1) {
-        while !it.starts_with(&out) {
-            out.pop();
-            if out.is_empty() {
-                return out;
-            }
-        }
-    }
-    out
 }
 
 /// 相对时间（不依赖时区数据）
@@ -1340,13 +1496,47 @@ mod tests {
     }
 
     #[test]
-    fn tab_completion_common_prefix() {
+    fn tab_completion_picks_highlighted_suggestion() {
         let mut app = dummy_app(Mode::Agent);
         app.set_input("/re".to_string());
+        assert!(app.suggestions().len() > 1);
         app.handle_key(Key::Tab);
-        // /reasoning /repo /repos /resume /retry → 公共前缀 "/re"
-        assert_eq!(app.input, "/re");
-        assert!(app.notice.is_some());
+        assert_eq!(app.input, "/reasoning ");
+
+        // ↓ 挪一格再 Tab，补的是第二条
+        let mut app = dummy_app(Mode::Agent);
+        app.set_input("/re".to_string());
+        app.handle_key(Key::Down);
+        app.handle_key(Key::Tab);
+        assert_eq!(app.input, "/repo ");
+    }
+
+    #[test]
+    fn picker_moves_with_arrows_and_switches_session() {
+        let mut app = dummy_app(Mode::Agent);
+        app.picker = Some(Picker::new(
+            PickKind::Session,
+            "桥上的会话",
+            vec![
+                ("main".to_string(), "main".to_string()),
+                ("main-2".to_string(), "main-2".to_string()),
+            ],
+        ));
+        app.handle_key(Key::Down);
+        app.handle_key(Key::Enter);
+        assert!(app.picker.is_none());
+        assert_eq!(app.cfg.session, "main-2");
+
+        // Esc 取消，不改任何东西
+        let mut app = dummy_app(Mode::Agent);
+        app.picker = Some(Picker::new(
+            PickKind::Session,
+            "桥上的会话",
+            vec![("x".to_string(), "x".to_string())],
+        ));
+        app.handle_key(Key::Esc);
+        assert!(app.picker.is_none());
+        assert_eq!(app.cfg.session, "main");
     }
 
     #[test]
