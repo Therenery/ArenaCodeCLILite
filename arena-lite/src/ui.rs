@@ -191,6 +191,7 @@ fn header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
     let side = w >= info_x + 26;
 
     if side {
+        let slots = info_slots(app);
         let mut out = Vec::with_capacity(rows);
         for (i, line) in logo.iter().enumerate() {
             let mut row = Row::new();
@@ -200,7 +201,9 @@ fn header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
             if pad > 0 {
                 row.push_plain(&" ".repeat(pad));
             }
-            info_line(&mut row, app, th, i, w.saturating_sub(info_x));
+            if let Some(&slot) = slots.get(i) {
+                info_line(&mut row, app, th, slot, w.saturating_sub(info_x));
+            }
             out.push(row.styled);
         }
         return out;
@@ -227,9 +230,30 @@ fn header_rows(app: &App, w: usize, th: &Theme, logo_w: usize) -> Vec<String> {
     out
 }
 
-/// 信息列：标题 / 模式·模型 / 会话·桥 / 进度
-fn info_line(row: &mut Row, app: &App, th: &Theme, idx: usize, avail: usize) {
+/// 信息列有哪几行：0 标题 / 1 模式·模型 / 2 仓库 / 3 会话·桥 / 4 进度
+fn info_slots(app: &App) -> Vec<u8> {
+    let mut v = vec![0u8, 1u8];
+    // agent 模式常驻显示当前仓库
+    if app.mode() == crate::mode::Mode::Agent && !app.repo.is_empty() {
+        v.push(2);
+    }
+    v.push(3);
+    v.push(4);
+    v
+}
+
+fn info_line(row: &mut Row, app: &App, th: &Theme, idx: u8, avail: usize) {
     match idx {
+        2 => {
+            row.push(th, "repo  ", Some(Palette::Dim), false);
+            let used = 6;
+            row.push(
+                th,
+                &fit(&app.repo, avail.saturating_sub(used)),
+                Some(Palette::Accent),
+                false,
+            );
+        }
         0 => {
             let title = "Arena Code";
             row.push(th, &fit(title, avail), Some(Palette::Accent), true);
@@ -242,7 +266,7 @@ fn info_line(row: &mut Row, app: &App, th: &Theme, idx: usize, avail: usize) {
             let text = format!("{} · {}", app.mode().label(), app.model_label());
             row.push(th, &fit(&text, avail), Some(Palette::Dim), false);
         }
-        2 => {
+        3 => {
             let (dot, pal, note) = bridge_state(app);
             let tail = if note.is_empty() {
                 app.cfg.base_display.clone()
@@ -278,13 +302,11 @@ fn narrow_info(row: &mut Row, app: &App, th: &Theme, avail: usize) {
     } else {
         note
     };
-    let text = format!(
-        "{} · {} · {} · {}",
-        app.mode().label(),
-        app.model_label(),
-        app.cfg.session,
-        tail
-    );
+    let mut text = format!("{} · {}", app.mode().label(), app.model_label());
+    if app.mode() == crate::mode::Mode::Agent && !app.repo.is_empty() {
+        text.push_str(&format!(" · {}", app.repo));
+    }
+    text.push_str(&format!(" · {} · {}", app.cfg.session, tail));
     let head = fit(&text, avail.saturating_sub(2));
     row.push(th, &head, Some(Palette::Dim), false);
     row.push(th, " ", None, false);
@@ -952,6 +974,30 @@ mod tests {
         assert!(plain[idx].contains("输入消息"));
         assert!(plain[idx - 1].starts_with('─'), "输入框上面缺横线");
         assert!(plain[idx + 1].starts_with('─'), "输入框下面缺横线");
+    }
+
+    #[test]
+    fn agent_mode_shows_current_repo() {
+        let mut a = app(Mode::Agent);
+        a.repo = "Therenery/arena-bridge".into();
+        let text: String = render_rows(&mut a, Size { cols: 100, rows: 30 }, &Theme::new(false))
+            .iter()
+            .map(|r| strip_ansi(r))
+            .collect::<Vec<_>>()
+            .join("
+");
+        assert!(text.contains("repo  Therenery/arena-bridge"), "{}", text);
+
+        // battle 模式不显示仓库
+        let mut b = app(Mode::Battle);
+        b.repo = "x/y".into();
+        let text: String = render_rows(&mut b, Size { cols: 100, rows: 30 }, &Theme::new(false))
+            .iter()
+            .map(|r| strip_ansi(r))
+            .collect::<Vec<_>>()
+            .join("
+");
+        assert!(!text.contains("repo  x/y"));
     }
 
     #[test]

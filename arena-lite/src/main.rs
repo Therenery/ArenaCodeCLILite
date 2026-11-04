@@ -736,6 +736,8 @@ fn run_tui(opts: &Opts, session_override: Option<String>, preload: Option<Vec<Ch
         ));
     }
     app.push_system(hello);
+    // 顶部要常驻显示当前仓库
+    app.fetch_repo();
 
     // 读键线程
     term::spawn_input(tx.clone());
@@ -837,6 +839,8 @@ fn handle_msg(app: &mut App, msg: Msg, out: &mut std::io::Stdout) {
         Msg::Health(res) => app.on_health(res),
         Msg::History(res) => app.on_history(res),
         Msg::SessionList(list) => app.on_session_list(list),
+        Msg::RepoList { current, list } => app.on_repo_list(current, list),
+        Msg::RepoCurrent(cur) => app.on_repo_current(cur),
         Msg::ConversationList(list) => app.on_conversation_list(list),
         Msg::Notice(text) => app.notice(text),
     }

@@ -116,9 +116,6 @@ arena-lite --version
 | `NO_COLOR=1` / `ARENA_NO_COLOR=1` | 关颜色 |
 | `COLUMNS` / `LINES` | 拿不到终端尺寸时的兜底（Unix） |
 
----
-
-
 ### 从源码构建（开源版）
 
 ~~~powershell
@@ -130,6 +127,44 @@ corepack pnpm run build
 ~~~
 
 补丁做四件事：把内置 banner 换成 ARENA 字符画（青色→靛紫渐变）、标题改 Arena Code、清掉所有俏皮加载文案、程序名改成 arena。
+
+---
+
+
+## 3. 界面与键位
+
+排版照着 Claude Code：左边是 ARENA 的 ANSI Shadow 字（青 → 天蓝 → 藕荷逐行渐变），右边几行信息，不加框。
+
+```
+   █████╗  ██████╗  ███████╗ ███╗   ██╗  █████╗    Arena Code v2.0.0
+  ██╔══██╗ ██╔══██╗ ██╔════╝ ████╗  ██║ ██╔══██╗   agent · arena-agent
+  ███████║ ██████╔╝ █████╗   ██╔██╗ ██║ ███████║   repo  Therenery/arena-bridge
+  ██╔══██║ ██╔══██╗ ██╔══╝   ██║╚██╗██║ ██╔══██║   main-2 · 127.0.0.1:17892 ●
+  ██║  ██║ ██║  ██║ ███████╗ ██║ ╚████║ ██║  ██║
+  ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝
+```
+
+agent 模式下当前仓库常驻显示在标题下面那一行（`repo  owner/name`），切仓库或换模式立刻更新；
+battle / side / direct 模式不显示这一行。
+
+终端窄到放不下并排时，信息压成两行摞在 LOGO 下面；再窄就退回单行状态栏。
+`--no-logo` / `ARENA_NO_LOGO=1` 直接关掉整个头。
+
+输入框紧跟在**最后一条消息**后面，不再钉在屏幕底部——内容少的时候它就浮在上面，下面留白。
+
+打 `/` 会弹出命令列表，灰字带说明，↑↓ 选、Tab 补进去、Enter 直接执行：
+
+```
+❯ /reasoning  思考链展开/收起
+  /repo       换仓库，不带参数就列出来选
+  /resume     打开网页端会话
+──────────────────────────────────────────────
+❯ /re
+──────────────────────────────────────────────
+  Enter to confirm · Esc to cancel
+```
+
+`/resume`、`/sessions`、`/repo` 都是同一套：↑↓ 选、Enter 确认、Esc 取消。
 
 | 键 | 行为 |
 | --- | --- |
@@ -163,7 +198,7 @@ corepack pnpm run build
 | `/sessions` | 列出桥当前的标签页（调试用，不载入） |
 | `/new` | 清空服务端会话（`GET /new`） |
 | `/health` | 体检桥（`GET /health`） |
-| `/repos` `/repo <owner/name>` | 查看 / 切换工作区仓库（切仓库等于开新对话） |
+| `/repo` | 列出所有仓库，↑↓ 选、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
 | `/vote a\|b\|tie\|both` | 对战投票（`POST /vote`） |
 | `/upload <路径[,路径]>` | 上传文件到当前会话（`POST /upload`） |
 | `/reasoning` `/tools` | 展开/折叠思考链 / 工具块 |

@@ -81,6 +81,7 @@ pub struct Picker {
 pub enum PickKind {
     Conversation,
     Session,
+    Repo,
 }
 
 impl Picker {
@@ -153,6 +154,8 @@ pub struct App {
     pub picker: Option<Picker>,
     /// 命令补全列表里高亮到第几个
     pub suggest_sel: usize,
+    /// 当前仓库（agent 模式下常驻显示在顶部）
+    pub repo: String,
 }
 
 impl App {
@@ -186,6 +189,7 @@ impl App {
             last_prompt: None,
             picker: None,
             suggest_sel: 0,
+            repo: String::new(),
         }
     }
 
@@ -691,6 +695,77 @@ impl App {
                 self.cfg.session = value.clone();
                 self.notice(format!("会话已切到 {}", value));
             }
+            PickKind::Repo => self.switch_repo(&value),
+        }
+    }
+
+    /// 读桥上的仓库列表，弹成选择列表
+    pub fn list_repos(&mut self) {
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || match client.repos() {
+            Ok((current, list)) => {
+                let _ = tx.send(Msg::RepoList { current, list });
+            }
+            Err(e) => {
+                let _ = tx.send(Msg::Notice(format!("读仓库列表失败：{}", e.short())));
+            }
+        });
+    }
+
+    pub fn on_repo_list(&mut self, current: String, list: Vec<String>) {
+        self.repo = current.clone();
+        if list.is_empty() {
+            self.push_system("桥上还没有配置仓库（先 /repo <owner/name>）");
+            return;
+        }
+        let rows: Vec<(String, String)> = list
+            .iter()
+            .map(|r| {
+                let mark = if *r == current { "  ← 当前" } else { "" };
+                (format!("{}{}", r, mark), r.clone())
+            })
+            .collect();
+        self.picker = Some(Picker::new(PickKind::Repo, "仓库", rows));
+        self.notice("↑↓ 选仓库，Enter 切过去，Esc 取消");
+        self.dirty = true;
+    }
+
+    /// 切仓库（等于开新对话）
+    pub fn switch_repo(&mut self, name: &str) {
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        let session = self.cfg.session.clone();
+        let name = name.to_string();
+        self.blocks.clear();
+        self.log.clear();
+        self.repo = name.clone();
+        self.push_system(format!("正在切到仓库 {} …（这等于开新对话）", name));
+        std::thread::spawn(move || match client.switch_repo(&name, &session) {
+            Ok(_) => {
+                let _ = tx.send(Msg::Notice(format!("已切到 {}", name)));
+            }
+            Err(e) => {
+                let _ = tx.send(Msg::Notice(format!("切仓库失败：{}", e.short())));
+            }
+        });
+    }
+
+    /// 启动时把当前仓库拉下来，顶部才能常驻显示
+    pub fn fetch_repo(&mut self) {
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            if let Ok((current, _)) = client.repos() {
+                let _ = tx.send(Msg::RepoCurrent(current));
+            }
+        });
+    }
+
+    pub fn on_repo_current(&mut self, current: String) {
+        if self.repo != current {
+            self.repo = current;
+            self.dirty = true;
         }
     }
 
@@ -813,45 +888,12 @@ impl App {
                 });
             }
             "/health" => self.fetch_health(),
-            "/repos" => {
-                let client = Arc::clone(&self.client);
-                let tx = self.tx.clone();
-                std::thread::spawn(move || match client.repos() {
-                    Ok((cur, list)) => {
-                        let _ = tx.send(Msg::Notice(format!(
-                            "当前仓库 {}；可选 {}",
-                            if cur.is_empty() { "（未选）" } else { &cur },
-                            if list.is_empty() {
-                                "（列表为空）".to_string()
-                            } else {
-                                list.join(" / ")
-                            }
-                        )));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Msg::Notice(format!("读仓库列表失败：{}", e.short())));
-                    }
-                });
-            }
-            "/repo" => {
+            "/repo" | "/repos" => {
                 if rest.is_empty() {
-                    self.notice("用法：/repo <owner/name>（等于开新对话）");
-                    return;
+                    self.list_repos();
+                } else {
+                    self.switch_repo(&rest);
                 }
-                let client = Arc::clone(&self.client);
-                let tx = self.tx.clone();
-                let session = self.cfg.session.clone();
-                self.blocks.clear();
-                self.log.clear();
-                self.push_system(format!("正在切到仓库 {} …（这等于开新对话）", rest));
-                std::thread::spawn(move || match client.switch_repo(&rest, &session) {
-                    Ok(_) => {
-                        let _ = tx.send(Msg::Notice(format!("已切到 {}", rest)));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Msg::Notice(format!("切仓库失败：{}", e.short())));
-                    }
-                });
             }
             "/vote" => {
                 let choice = rest.to_ascii_lowercase();
@@ -1100,8 +1142,7 @@ impl App {
             ("/new", "清空当前会话"),
             ("/quit", "退出"),
             ("/reasoning", "思考链展开/收起"),
-            ("/repo", "换仓库"),
-            ("/repos", "列仓库"),
+            ("/repo", "换仓库，不带参数就列出来选"),
             ("/resume", "打开网页端会话"),
             ("/retry", "重发上一句"),
             ("/session", "切会话名"),
@@ -1509,6 +1550,20 @@ mod tests {
         app.handle_key(Key::Down);
         app.handle_key(Key::Tab);
         assert_eq!(app.input, "/repo ");
+    }
+
+    #[test]
+    fn repo_list_becomes_picker_and_marks_current() {
+        let mut app = dummy_app(Mode::Agent);
+        app.on_repo_list(
+            "a/b".to_string(),
+            vec!["a/b".to_string(), "c/d".to_string()],
+        );
+        assert_eq!(app.repo, "a/b");
+        let p = app.picker.as_ref().expect("没弹列表");
+        assert_eq!(p.items.len(), 2);
+        assert_eq!(p.items[0], "a/b  ← 当前");
+        assert_eq!(p.items[1], "c/d");
     }
 
     #[test]

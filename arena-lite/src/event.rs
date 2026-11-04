@@ -28,6 +28,9 @@ pub enum Msg {
     History(Result<History, BridgeError>),
     /// 会话列表（名字 + 摘要 + 时间）
     SessionList(Vec<SessionInfo>),
+    RepoList { current: String, list: Vec<String> },
+    /// 只更新「当前仓库」，不弹列表
+    RepoCurrent(String),
     /// 网页端左侧栏的会话列表（/resume）
     ConversationList(Vec<Conversation>),
     /// 一次性提示（比如「已切到 side 模式」）
