@@ -17,13 +17,36 @@ arena ❯ 好的，我先看一下目录树……
 › 输入问题，Enter 发送，Ctrl+C 退出
 ```
 
+## 安装
+
+到 [Releases](https://github.com/Therenery/ArenaCodeCLILite/releases/latest) 下载 `arena-setup-<版本>.zip`：
+
+1. 解压到任意目录
+2. 双击 `install.cmd`
+3. 完事
+
+安装程序会把这些放到 `%LOCALAPPDATA%\Programs\Arena`：
+
+- `arena-lite.exe` —— 客户端
+- `bridge\` —— 桥（Node，随包附带）
+- `scripts\` —— 浏览器最小化 / 抢焦点
+- `install.ps1`、`uninstall.ps1`
+
+然后加进用户 PATH，建桌面和开始菜单快捷方式。**不需要管理员权限**，不写注册表启动项，不装服务。
+
+卸载：开始菜单 → Arena → 卸载 Arena。
+
+依赖：Node.js ≥ 21（[nodejs.org](https://nodejs.org/)）和 Chrome / Edge。安装程序会检查。
+
 ## 组成
 
 | 路径 | 作用 |
 |---|---|
-| `arena-lite/` | Rust 客户端源码，18 个源文件，`Cargo.toml` 的 `[dependencies]` 为空 |
+| `arena-lite/` | Rust 客户端源码，`Cargo.toml` 的 `[dependencies]` 为空 |
+| `installer/` | 安装包内容（脚本、桥的副本、说明），`build-installer.ps1` 把它和 exe 打成 zip |
+| `dist/` | 打好的安装包，不进版本库 |
 
-桥不在这个仓库里，正本在 [arena-bridge](https://github.com/Therenery/arena-bridge)（`node arena_bridge.js`，监听 `127.0.0.1:17892`，同样零第三方依赖）。
+桥的正本在 [arena-bridge](https://github.com/Therenery/arena-bridge)（`node arena_bridge.js`，监听 `127.0.0.1:17892`，同样零第三方依赖）。`installer/bridge/` 是发版时的快照，升级桥要两边同步。
 
 ## 编译
 
@@ -36,10 +59,17 @@ cargo build --release        # 产物 target\release\arena-lite.exe
 
 ```bash
 cd arena-lite
-bash scripts/check.sh        # 编 release + 跑全部单测 + 顺手做一次 Windows 目标编译检查
+bash scripts/check.sh        # 编 release + 跑全部单测 + 交叉编出 Windows exe
 ```
 
-## 跑起来
+打安装包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build-installer.ps1
+# 产物 dist\arena-setup-<版本>.zip
+```
+
+## 从源码跑
 
 ```cmd
 rem 1. 起桥（在 arena-bridge 仓库里；会自己找 Chrome，带 --remote-debugging-port=9222 拉起来）
@@ -58,11 +88,12 @@ arena-lite
 
 | 项 | 结果 |
 |---|---|
-| 交叉编译 | `rustc 1.93.1` → `x86_64-pc-windows-gnu`，638 KB 单文件 |
-| 版本 | `arena-lite --version` → `arena-lite 2.0.0` |
+| 交叉编译 | `rustc 1.93.1` → `x86_64-pc-windows-gnu`，722 KB 单文件 |
+| 版本 | `arena-lite --version` → `arena-lite 2.0.7` |
 | 体检 | `arena-lite health` → 桥通、Chrome 已连接、队列 0/4 |
 | 单发 | `arena-lite '只回一个字：好'` → `好`（真走桥） |
-| 单测 | `cargo test` 全绿 |
+| 单测 | 140 个全绿 |
+| 安装 | 解压 → `install.cmd` → 桌面图标能起客户端；`uninstall.ps1` 能清干净 |
 
 ## 详细文档
 

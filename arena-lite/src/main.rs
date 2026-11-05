@@ -33,7 +33,7 @@ use httpc::Base;
 use mode::Mode;
 use theme::{Palette, Theme};
 
-pub const VERSION: &str = "2.0.6";
+pub const VERSION: &str = "2.0.7";
 const DEFAULT_BASE: &str = "127.0.0.1:17892";
 
 /* ------------------------------ 参数 ------------------------------ */
