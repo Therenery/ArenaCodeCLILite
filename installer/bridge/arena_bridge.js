@@ -10,7 +10,7 @@ const path = require('path');
 const { exec, spawn } = require('child_process');
 const { parseFrame } = require('./lib/parse');
 
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 const CDP_PORT = 9222;
 const PORT = 17892;
 const HOST = '127.0.0.1';
@@ -1087,7 +1087,12 @@ const server = http.createServer(async (req, res) => {
       // 所以：读列表用专门的空白页，切换则必须把会话页导航回 /agent。
       const key = want ? rn : rn + '#repos';
       const s = await getSession(key, { mode: 'agent', url: 'https://arena.ai/agent' });
-      if (want) await s.cdp.send('Page.navigate', { url: 'https://arena.ai/agent' }).catch(() => {});
+      // 仓库芯片只长在空白 /agent 页上。已有标签可能已经进了具体会话，
+      // 读列表和切换都得先把它拉回 /agent，否则找不到芯片。
+      const here = await s.cdp.ev('location.href').catch(() => '');
+      if (!/^https:\/\/arena\.ai\/agent\/?(\?|#|$)/.test(here)) {
+        await s.cdp.send('Page.navigate', { url: 'https://arena.ai/agent' }).catch(() => {});
+      }
       await waitReady(s.cdp);
       const escKey = async () => {
         await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {});

@@ -767,10 +767,19 @@ fn input_rows(
     let avail = w.saturating_sub(2).max(4);
     let mut out: Vec<String> = Vec::with_capacity(input_h + 2);
     // 输入框顶边：Agent 模式下把当前仓库贴在右边，一眼就能看到在哪个库上干活
-    let repo_label = if app.mode() == crate::mode::Mode::Agent && !app.repo.is_empty() {
-        format!(" {} {} ", tr(app, "仓库", "repo"), app.repo)
+    // Agent 模式下顶边常驻仓库位置。还没选（或桥没读到）时显示一个暗色的破折号，
+    // 至少让人知道这个位置存在、该敲 /repo。
+    let (repo_label, repo_pal) = if app.mode() == crate::mode::Mode::Agent {
+        if app.repo.is_empty() {
+            (format!(" {} — ", tr(app, "仓库", "repo")), Palette::Dim)
+        } else {
+            (
+                format!(" {} {} ", tr(app, "仓库", "repo"), app.repo),
+                Palette::Accent,
+            )
+        }
     } else {
-        String::new()
+        (String::new(), Palette::Dim)
     };
     let label_w = str_width(&repo_label);
     if label_w == 0 || label_w + 6 > w {
@@ -778,7 +787,7 @@ fn input_rows(
     } else {
         let mut row = Row::new();
         row.push(th, &repeat('─', w - label_w - 2), Some(Palette::Dim), false);
-        row.push(th, &repo_label, Some(Palette::Accent), false);
+        row.push(th, &repo_label, Some(repo_pal), false);
         row.push(th, "──", Some(Palette::Dim), false);
         out.push(row.styled);
     }
@@ -1383,7 +1392,7 @@ mod tests {
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
         assert!(joined.contains("Arena Code"), "缺少标题");
-        assert!(joined.contains("v2.0.7"), "缺少版本号");
+        assert!(joined.contains("v2.0.8"), "缺少版本号");
         assert!(joined.contains("agent · arena-agent"), "缺少模式·模型");
         assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
         assert!(!joined.contains('┌'), "不该再画框了");
