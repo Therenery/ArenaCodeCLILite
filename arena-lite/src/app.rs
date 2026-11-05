@@ -140,6 +140,9 @@ pub struct App {
     pub scroll_top: usize,
     pub follow: bool,
     pub view_h: usize,
+    /// 上一帧能滚到的最大顶行。scroll_top 可能是 usize::MAX（等渲染时夹回），
+    /// 按键时先拿它夹一次，否则第一次上滑会被吃掉。
+    pub max_top: usize,
 
     pub show_reasoning: bool,
     /// 这一帧输入光标该落在屏幕哪一行哪一列（1 基），None 表示不显示
@@ -195,6 +198,7 @@ impl App {
             scroll_top: 0,
             follow: true,
             view_h: 10,
+            max_top: 0,
             show_reasoning,
             cursor_at: None,
             hit_top: 0,
@@ -443,17 +447,14 @@ impl App {
 
     pub fn scroll_page(&mut self, up: bool) {
         let step = self.view_h.saturating_sub(1).max(1);
+        // scroll_top 可能是 usize::MAX（等渲染时夹回）。先按上一帧的实际上限夹一次，
+        // 否则第一下上滑等于没按。
+        let cur = self.scroll_top.min(self.max_top);
         if up {
-            let cur = if self.follow {
-                // 从底部开始：先算当前顶行，再上移一页
-                self.scroll_top.max(0)
-            } else {
-                self.scroll_top
-            };
             self.scroll_top = cur.saturating_sub(step);
             self.follow = false;
         } else {
-            self.scroll_top = self.scroll_top.saturating_add(step);
+            self.scroll_top = cur.saturating_add(step);
             // 是否已经到底会在渲染时确认
             self.follow = false;
         }
@@ -462,10 +463,11 @@ impl App {
 
     /// 滚轮：按行滚动
     pub fn scroll_lines(&mut self, up: bool, n: usize) {
+        let cur = self.scroll_top.min(self.max_top);
         if up {
-            self.scroll_top = self.scroll_top.saturating_sub(n);
+            self.scroll_top = cur.saturating_sub(n);
         } else {
-            self.scroll_top = self.scroll_top.saturating_add(n);
+            self.scroll_top = cur.saturating_add(n);
         }
         self.follow = false;
         self.dirty = true;
@@ -540,11 +542,12 @@ impl App {
     /// 渲染时把「顶行」校准：到底了就恢复跟随
     pub fn anchor(&mut self, total_lines: usize) {
         let h = self.view_h;
+        let max_top = total_lines.saturating_sub(h);
+        self.max_top = max_top;
         if self.follow {
-            self.scroll_top = total_lines.saturating_sub(h);
+            self.scroll_top = max_top;
             return;
         }
-        let max_top = total_lines.saturating_sub(h);
         if self.scroll_top >= max_top {
             self.scroll_top = max_top;
             self.follow = true;
@@ -557,7 +560,8 @@ impl App {
 
     pub fn submit(&mut self) {
         if self.busy() {
-            self.notice("正在生成，先 Ctrl+C 中断再发");
+            // 输入框故意不清空：这条确实没发出去，用户还能接着改
+            self.notice("上一轮还在跑，这条没发出去；Ctrl+C 可中断");
             return;
         }
         // /repo 的候选：光敲了 /repo 就回车，切到高亮那个
@@ -985,7 +989,7 @@ impl App {
                 if rest.is_empty() {
                     self.set_mode(Mode::Battle);
                 } else if self.busy() {
-                    self.notice("正在生成，先等这一轮结束");
+                    self.notice("上一轮还在跑，这条没发出去；Ctrl+C 可中断");
                 } else {
                     self.cfg.mode = Mode::Battle;
                     self.push_prompt(rest);
@@ -1832,12 +1836,27 @@ mod tests {
     fn wheel_scrolls_three_lines() {
         let mut app = dummy_app(Mode::Agent);
         app.view_h = 10;
+        app.max_top = 90; // 上一帧渲染出来的可滚上限
         app.scroll_top = 20;
         app.follow = false;
         app.handle_key(Key::WheelUp);
         assert_eq!(app.scroll_top, 17);
         app.handle_key(Key::WheelDown);
         assert_eq!(app.scroll_top, 20);
+    }
+
+    #[test]
+    fn first_pageup_is_not_swallowed_when_scroll_top_is_max() {
+        // push_prompt 会把 scroll_top 设成 usize::MAX 等渲染时夹回。
+        // 如果用户在渲染前就按 PageUp，旧逻辑会把这一下吃掉。
+        let mut app = dummy_app(Mode::Battle);
+        app.view_h = 20;
+        app.max_top = 80;
+        app.scroll_top = usize::MAX;
+        app.follow = true;
+        app.scroll_page(true);
+        assert!(!app.follow);
+        assert_eq!(app.scroll_top, 61);
     }
 
     #[test]
@@ -2015,4 +2034,6 @@ mod tests {
         app.run_command("/nope");
         assert!(app.notice.as_ref().map(|(t, _)| t.contains("没有这个命令")).unwrap_or(false));
     }
+
+
 }

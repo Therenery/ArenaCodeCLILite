@@ -114,14 +114,15 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     let w = size.cols as usize;
     let h = size.rows as usize;
 
-    // 输入区高度：最多 3 行
+    // 输入区高度：跟着内容长，最多占屏幕三分之一（上限 8 行）
     let input_w = w.saturating_sub(2).max(4);
     let input_lines = if app.input.is_empty() {
         1
     } else {
         wrap(&app.input, input_w).len()
     };
-    let input_h = input_lines.clamp(1, 3);
+    let max_input_h = (h / 3).clamp(1, 8);
+    let input_h = input_lines.clamp(1, max_input_h);
     let logo_w = theme::LOGO_LINES
         .iter()
         .map(|l| str_width(l))
