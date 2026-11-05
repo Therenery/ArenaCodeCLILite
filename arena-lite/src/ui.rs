@@ -1472,6 +1472,40 @@ mod tests {
     }
 
     #[test]
+    fn input_top_border_carries_repo() {
+        let render = |a: &mut App| {
+            render_rows(a, Size { cols: 100, rows: 30 }, &Theme::new(false))
+                .iter()
+                .map(|r| strip_ansi(r))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // 顶边那一行 = 带框线、又带仓库信息的那行
+        let border_with = |text: &str, needle: &str| {
+            text.lines()
+                .any(|l| l.contains(needle) && l.matches('─').count() > 5)
+        };
+
+        // 有仓库：名字贴在输入框顶边
+        let mut a = app(Mode::Agent);
+        a.repo = "Therenery/arena-bridge".into();
+        let text = render(&mut a);
+        assert!(border_with(&text, "Therenery/arena-bridge"), "{}", text);
+
+        // 没选：留一个破折号，位置照样在
+        let mut b = app(Mode::Agent);
+        b.repo = String::new();
+        let text = render(&mut b);
+        assert!(border_with(&text, "—"), "{}", text);
+
+        // battle 不给仓库留位置
+        let mut c = app(Mode::Battle);
+        c.repo = "x/y".into();
+        let text = render(&mut c);
+        assert!(!border_with(&text, "x/y"), "{}", text);
+    }
+
+    #[test]
     fn command_suggestions_render_below_input() {
         let mut a = app(Mode::Agent);
         a.input = "/re".to_string();
