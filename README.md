@@ -1,8 +1,8 @@
 # ArenaCodeCLILite
 
-`arena_bridge` 的纯自研终端客户端：Rust 写，**零第三方依赖**（只有 std），Windows 优先，单二进制。
+把 [arena.ai](https://arena.ai) 的 Agent 模式接进终端的 Rust 客户端：**零第三方依赖**（只有 std），Windows 优先，单二进制。
 
-只做桥接这一件事——常驻模式对话（agent / direct / side / battle）、双栏对战与投票、网页端历史载入、桥体检。
+只做桥接这一件事——常驻模式对话（agent / direct / side / battle）、双栏对战与投票、网页端历史载入、文件上传、桥体检。
 
 **没有**渠道（微信/QQ/飞书/钉钉）、**没有**沙箱、**没有** MCP、**没有**扩展 / skills / 子代理 / 批量任务。
 
@@ -88,16 +88,18 @@ arena-lite
 
 | 项 | 结果 |
 |---|---|
-| 交叉编译 | `rustc 1.93.1` → `x86_64-pc-windows-gnu`，722 KB 单文件 |
-| 版本 | `arena-lite --version` → `arena-lite 2.0.7` |
+| 交叉编译 | `rustc 1.93.1` → `x86_64-pc-windows-gnu`，764 KB 单文件 |
+| 版本 | `arena-lite --version` → `arena-lite 2.0.9` |
 | 体检 | `arena-lite health` → 桥通、Chrome 已连接、队列 0/4 |
 | 单发 | `arena-lite '只回一个字：好'` → `好`（真走桥） |
-| 单测 | 140 个全绿 |
+| 单测 | 141 个全绿 |
 | 安装 | 解压 → `install.cmd` → 桌面图标能起客户端；`uninstall.ps1` 能清干净 |
 
 ## 详细文档
 
 `arena-lite/README.md` 里有完整的键位表、模式说明、SSE 事件映射和实现约束。
+
+给 AI / 自动化用的最短路径、接口表和常见错误见 [AGENTS.md](AGENTS.md)。
 
 ## 相关
 

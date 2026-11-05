@@ -217,9 +217,9 @@ battle / side / direct 模式不显示这一行。
 | `/health` | 体检桥（`GET /health`） |
 | `/repo` | 边打边列仓库：输入框下方直接出列表，↑↓ 选、选中即填入、Enter 切过去（切仓库等于开新对话）；也可以 `/repo <owner/name>` 直接切 |
 | `/vote a\|b\|tie\|both` | 对战投票（`POST /vote`） |
-| `/upload <路径[,路径]>` | 上传文件到当前会话（`POST /upload`） |
+| `/upload [路径[,路径]]` | 不带路径时弹系统选文件窗口；也可以直接写路径。选文件方式在 `/config` 里切（`POST /upload`） |
 | `/reasoning` `/tools` | 展开/折叠思考链 / 工具块 |
-| `/config` `/settings` | 设置面板：语言、Markdown/LaTeX 渲染、思考链与工具块默认展开；`←→` 切页，`Enter` 切换，改完立刻写盘 |
+| `/config` `/settings` | 设置面板：语言、Markdown/LaTeX 渲染、思考链与工具块默认展开、选文件方式；`←→` 切页，`Enter` 切换，改完立刻写盘 |
 | `/clear` | 清屏 |
 | `/retry` | 重发上一问（嗯，第 7 条里的「最多重试一次」用完后可以用它手动再来） |
 | `/help` | 命令表 |

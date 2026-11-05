@@ -12,6 +12,7 @@ mod httpc;
 mod json;
 mod keys;
 mod mode;
+mod picker;
 mod settings;
 mod sse;
 mod term;
@@ -33,7 +34,7 @@ use httpc::Base;
 use mode::Mode;
 use theme::{Palette, Theme};
 
-pub const VERSION: &str = "2.0.8";
+pub const VERSION: &str = "2.0.9";
 const DEFAULT_BASE: &str = "127.0.0.1:17892";
 
 /* ------------------------------ 参数 ------------------------------ */
@@ -844,6 +845,11 @@ fn handle_msg(app: &mut App, msg: Msg, out: &mut std::io::Stdout) {
         Msg::RepoListFailed(why) => app.on_repo_list_failed(why),
         Msg::RepoCurrent(cur) => app.on_repo_current(cur),
         Msg::ConversationList(list) => app.on_conversation_list(list),
+        Msg::UploadPicked(res) => match res {
+            Ok(files) if files.is_empty() => app.notice("已取消"),
+            Ok(files) => app.upload_files(files),
+            Err(e) => app.notice(format!("选文件失败：{}", e)),
+        },
         Msg::Notice(text) => app.notice(text),
     }
 }

@@ -34,6 +34,8 @@ pub enum Msg {
     RepoCurrent(String),
     /// 网页端左侧栏的会话列表（/resume）
     ConversationList(Vec<Conversation>),
+    /// 系统选文件窗口的结果（/upload 不带参数）
+    UploadPicked(Result<Vec<String>, String>),
     /// 一次性提示（比如「已切到 side 模式」）
     Notice(String),
 }

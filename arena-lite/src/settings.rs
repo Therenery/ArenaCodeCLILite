@@ -27,6 +27,24 @@ impl Lang {
     }
 }
 
+/// /upload 不带参数时怎么选文件
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UploadPicker {
+    /// 调系统文件对话框（Windows 的资源管理器、Linux 的 zenity/kdialog）
+    Gui,
+    /// 只在输入框里手打路径
+    Path,
+}
+
+impl UploadPicker {
+    pub fn code(self) -> &'static str {
+        match self {
+            UploadPicker::Gui => "gui",
+            UploadPicker::Path => "path",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub lang: Lang,
@@ -38,6 +56,8 @@ pub struct Settings {
     pub reasoning_open: bool,
     /// 工具块默认展开（工具阶段正在跑的那个总是展开）
     pub tools_open: bool,
+    /// /upload 不带参数时的选文件方式
+    pub upload_picker: UploadPicker,
 }
 
 impl Default for Settings {
@@ -48,6 +68,13 @@ impl Default for Settings {
             latex: true,
             reasoning_open: false,
             tools_open: true,
+            // Windows 上直接弹资源管理器；其它平台默认手打路径，
+            // 因为 zenity/kdialog 不一定装了。
+            upload_picker: if cfg!(windows) {
+                UploadPicker::Gui
+            } else {
+                UploadPicker::Path
+            },
         }
     }
 }
@@ -90,6 +117,13 @@ impl Settings {
         if let Some(x) = v.bool_at(&["tools_open"]) {
             s.tools_open = x;
         }
+        if let Some(x) = v.str_at(&["upload_picker"]) {
+            s.upload_picker = if x.eq_ignore_ascii_case("path") {
+                UploadPicker::Path
+            } else {
+                UploadPicker::Gui
+            };
+        }
         s
     }
 
@@ -100,12 +134,13 @@ impl Settings {
             std::fs::create_dir_all(dir)?;
         }
         let text = format!(
-            "{{\n  \"lang\": \"{}\",\n  \"markdown\": {},\n  \"latex\": {},\n  \"reasoning_open\": {},\n  \"tools_open\": {}\n}}\n",
+            "{{\n  \"lang\": \"{}\",\n  \"markdown\": {},\n  \"latex\": {},\n  \"reasoning_open\": {},\n  \"tools_open\": {},\n  \"upload_picker\": \"{}\"\n}}\n",
             self.lang.code(),
             self.markdown,
             self.latex,
             self.reasoning_open,
-            self.tools_open
+            self.tools_open,
+            self.upload_picker.code()
         );
         std::fs::write(p, text)
     }
@@ -123,5 +158,13 @@ mod tests {
         assert!(s.tools_open);
         assert!(!s.reasoning_open);
         assert_eq!(s.lang, Lang::Zh);
+        assert_eq!(
+            s.upload_picker,
+            if cfg!(windows) {
+                UploadPicker::Gui
+            } else {
+                UploadPicker::Path
+            }
+        );
     }
 }

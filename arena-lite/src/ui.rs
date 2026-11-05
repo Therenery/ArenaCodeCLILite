@@ -245,7 +245,7 @@ fn panel_lines(app: &App, w: usize) -> Vec<Line> {
 
     match p.tab {
         0 => {
-            let rows: [(&str, String); 5] = [
+            let rows: [(&str, String); 6] = [
                 (
                     if en { "Language" } else { "语言" },
                     app.set.lang.label().to_string(),
@@ -273,6 +273,16 @@ fn panel_lines(app: &App, w: usize) -> Vec<Line> {
                         "工具块默认展开"
                     },
                     on_off(app.set.tools_open).to_string(),
+                ),
+                (
+                    if en { "File picker" } else { "选文件方式" },
+                    match (app.set.upload_picker, en) {
+                        (crate::settings::UploadPicker::Gui, false) => "文件管理器",
+                        (crate::settings::UploadPicker::Gui, true) => "File dialog",
+                        (crate::settings::UploadPicker::Path, false) => "手动输路径",
+                        (crate::settings::UploadPicker::Path, true) => "Type path",
+                    }
+                    .to_string(),
                 ),
             ];
             for (i, (name, val)) in rows.iter().enumerate() {
@@ -1392,7 +1402,7 @@ mod tests {
         let joined = plain.join("\n");
         assert!(joined.contains("█████╗"), "缺少 LOGO 字形");
         assert!(joined.contains("Arena Code"), "缺少标题");
-        assert!(joined.contains("v2.0.8"), "缺少版本号");
+        assert!(joined.contains("v2.0.9"), "缺少版本号");
         assert!(joined.contains("agent · arena-agent"), "缺少模式·模型");
         assert!(joined.contains("main · 127.0.0.1:17892"), "缺少会话·桥");
         assert!(!joined.contains('┌'), "不该再画框了");

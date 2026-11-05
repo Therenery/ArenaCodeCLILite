@@ -501,6 +501,12 @@ impl App {
                 self.show_reasoning = self.set.reasoning_open;
             }
             4 => self.set.tools_open = !self.set.tools_open,
+            5 => {
+                self.set.upload_picker = match self.set.upload_picker {
+                    crate::settings::UploadPicker::Gui => crate::settings::UploadPicker::Path,
+                    crate::settings::UploadPicker::Path => crate::settings::UploadPicker::Gui,
+                }
+            }
             _ => return,
         }
         let _ = self.set.save();
@@ -912,9 +918,28 @@ impl App {
         });
     }
 
-    /// 启动时把当前仓库拉下来，顶部才能常驻显示
-    pub fn fetch_repo(&mut self) {
+    /// 把一批本地文件挂到当前会话（/upload 和选文件窗口共用）
+    pub fn upload_files(&mut self, files: Vec<String>) {
+        if files.is_empty() {
+            self.notice("没有选中文件");
+            return;
+        }
         let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        let session = self.cfg.session.clone();
+        self.notice(format!("正在上传 {} 个文件…", files.len()));
+        std::thread::spawn(move || match client.upload(&files, &session) {
+            Ok(msg) => {
+                let _ = tx.send(Msg::Notice(msg));
+            }
+            Err(e) => {
+                let _ = tx.send(Msg::Notice(format!("上传失败：{}", e.human())));
+            }
+        });
+    }
+
+    /// 启动时把当前仓库拉下来，顶部才能常驻显示
+    pub fn fetch_repo(&mut self) {        let client = Arc::clone(&self.client);
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             if let Ok((current, _)) = client.repos() {
@@ -1077,26 +1102,23 @@ impl App {
             }
             "/upload" => {
                 if rest.is_empty() {
-                    self.notice("用法：/upload <本地文件路径>");
+                    if self.set.upload_picker == crate::settings::UploadPicker::Gui {
+                        self.notice("正在打开选文件窗口…");
+                        let tx = self.tx.clone();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(Msg::UploadPicked(crate::picker::pick_files()));
+                        });
+                    } else {
+                        self.notice("用法：/upload <本地文件路径>");
+                    }
                     return;
                 }
-                let client = Arc::clone(&self.client);
-                let tx = self.tx.clone();
-                let session = self.cfg.session.clone();
                 let files: Vec<String> = rest
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                self.notice(format!("正在上传 {} 个文件…", files.len()));
-                std::thread::spawn(move || match client.upload(&files, &session) {
-                    Ok(msg) => {
-                        let _ = tx.send(Msg::Notice(msg));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Msg::Notice(format!("上传失败：{}", e.human())));
-                    }
-                });
+                self.upload_files(files);
             }
             "/reasoning" => {
                 self.show_reasoning = !self.show_reasoning;
@@ -1165,7 +1187,7 @@ impl App {
         self.push_system("  /health                体检桥");
         self.push_system("  /repos  /repo <名>     查看/切换仓库");
         self.push_system("  /vote a|b|tie|both     对战投票");
-        self.push_system("  /upload <路径>         上传文件到当前会话");
+        self.push_system("  /upload [路径]        上传文件；不带路径弹选文件窗口");
         self.push_system("  /reasoning /tools      展开或折叠思考链 / 工具块");
         self.push_system("  /clear                 清屏（不动服务端上下文）");
         self.push_system("  /retry                 重发上一问");
@@ -1371,7 +1393,7 @@ impl App {
             let mut act = 0u8; // 1 = 切换开关，2 = 关闭
             let mut sel = 0usize;
             if let Some(p) = self.panel.as_mut() {
-                let rows = if p.tab == 0 { 5 } else { 0 };
+                let rows = if p.tab == 0 { 6 } else { 0 };
                 match k {
                     Key::Up => p.sel = p.sel.saturating_sub(1),
                     Key::Down => {

@@ -10,7 +10,7 @@ const path = require('path');
 const { exec, spawn } = require('child_process');
 const { parseFrame } = require('./lib/parse');
 
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 const CDP_PORT = 9222;
 const PORT = 17892;
 const HOST = '127.0.0.1';
@@ -29,8 +29,8 @@ const MAX_SESSIONS = Math.max(1, Number(process.env.ARB_MAX_SESSIONS) || 6);
 // 默认不打印 prompt 正文，也不落盘；排障时再开
 const DEBUG_PROMPT = /^(1|true|yes)$/i.test(process.env.ARB_DEBUG_PROMPT || '');
 // /upload 允许的目录白名单（path.delimiter 分隔）；留空表示不限制
-// 默认只允许状态目录与当前工作目录；要放开请显式设置 ARB_UPLOAD_ROOTS
-const UPLOAD_ROOTS = (process.env.ARB_UPLOAD_ROOTS || (STATE_DIR + path.delimiter + process.cwd())).split(path.delimiter).map(s => s.trim()).filter(Boolean);
+// 默认不限制；要收紧请显式设置 ARB_UPLOAD_ROOTS
+const UPLOAD_ROOTS = (process.env.ARB_UPLOAD_ROOTS || '').split(path.delimiter).map(s => s.trim()).filter(Boolean);
 // SSE 心跳间隔，防止客户端在长时间工具调用时判定连接空闲
 const SSE_PING_MS = Math.max(1000, Number(process.env.ARB_SSE_PING_MS) || 15000);
 // 单次输入框能装的字符上限，超出会被截断（页面里逐字符敲，越长越慢）
