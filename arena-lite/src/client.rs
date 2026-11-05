@@ -211,7 +211,18 @@ impl Client {
     }
 
     pub fn repos(&self) -> Result<(String, Vec<String>), BridgeError> {
-        let v = self.get_json("/repos?cached=1")?;
+        let mut v = self.get_json("/repos?cached=1")?;
+        // 缓存空说明桥还没去页面上读过（比如刚重启）。这时候必须真读一次：
+        // 桥会开一个空白 /agent 页、点仓库芯片把列表读出来，慢但只有这一次。
+        if v.arr_at(&["repos"]).map(|a| a.is_empty()).unwrap_or(true) {
+            let mut resp =
+                self.call(Request::new("GET", "/repos").read_timeout(Duration::from_secs(240)))?;
+            let text = resp
+                .read_text(8 * 1024 * 1024)
+                .map_err(BridgeError::from_http)?;
+            v = json::parse(&text)
+                .map_err(|e| BridgeError::Protocol(format!("JSON 解析失败：{}", e)))?;
+        }
         let current = v.str_at(&["repo"]).unwrap_or("").to_string();
         let mut list = Vec::new();
         if let Some(arr) = v.arr_at(&["repos"]) {

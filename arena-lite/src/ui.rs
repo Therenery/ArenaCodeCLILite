@@ -765,7 +765,22 @@ fn input_rows(
 ) -> (Vec<String>, Option<(usize, usize)>) {
     let avail = w.saturating_sub(2).max(4);
     let mut out: Vec<String> = Vec::with_capacity(input_h + 2);
-    out.push(th.dim(&repeat('─', w)));
+    // 输入框顶边：Agent 模式下把当前仓库贴在右边，一眼就能看到在哪个库上干活
+    let repo_label = if app.mode() == crate::mode::Mode::Agent && !app.repo.is_empty() {
+        format!(" {} {} ", tr(app, "仓库", "repo"), app.repo)
+    } else {
+        String::new()
+    };
+    let label_w = str_width(&repo_label);
+    if label_w == 0 || label_w + 6 > w {
+        out.push(th.dim(&repeat('─', w)));
+    } else {
+        let mut row = Row::new();
+        row.push(th, &repeat('─', w - label_w - 2), Some(Palette::Dim), false);
+        row.push(th, &repo_label, Some(Palette::Accent), false);
+        row.push(th, "──", Some(Palette::Dim), false);
+        out.push(row.styled);
+    }
 
     let lines: Vec<String> = if app.input.is_empty() {
         vec![String::new()]
