@@ -73,6 +73,7 @@ pub struct Health {
     pub max_queue: i64,
     pub min_gap_ms: i64,
     pub auth: bool,
+    pub user_email: String,
 }
 
 impl Health {
@@ -88,8 +89,16 @@ impl Health {
             max_queue: v.i64_at(&["limits", "maxQueue"]).unwrap_or(4),
             min_gap_ms: v.i64_at(&["limits", "minGapMs"]).unwrap_or(3000),
             auth: v.bool_at(&["auth"]).unwrap_or(false),
+            user_email: v.str_at(&["user", "email"]).unwrap_or("").to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectorInfo {
+    pub name: String,
+    pub connected: bool,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,6 +258,55 @@ impl Client {
             .read_text(1024 * 1024)
             .map_err(BridgeError::from_http)?;
         Ok(text)
+    }
+
+    pub fn connectors(&self, session: &str) -> Result<Vec<ConnectorInfo>, BridgeError> {
+        let path = urlenc::with_query("/connectors", &[("session", session)]);
+        let mut resp = self.call(Request::new("GET", &path).read_timeout(Duration::from_secs(60)))?;
+        let text = resp
+            .read_text(1024 * 1024)
+            .map_err(BridgeError::from_http)?;
+        let v = json::parse(&text)
+            .map_err(|e| BridgeError::Protocol(format!("JSON parse error: {}", e)))?;
+        let mut out = Vec::new();
+        if let Some(arr) = v.arr_at(&["connectors"]) {
+            for item in arr {
+                let name = item.str_at(&["name"]).unwrap_or("").to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                out.push(ConnectorInfo {
+                    name,
+                    connected: item.bool_at(&["connected"]).unwrap_or(false),
+                    enabled: item.bool_at(&["enabled"]).unwrap_or(false),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn toggle_connector(
+        &self,
+        name: &str,
+        enable: Option<bool>,
+        session: &str,
+    ) -> Result<(String, bool, bool, String), BridgeError> {
+        let mut pairs: Vec<(&str, &str)> = vec![("session", session), ("name", name)];
+        if let Some(en) = enable {
+            pairs.push(("enable", if en { "1" } else { "0" }));
+        }
+        let path = urlenc::with_query("/connector", &pairs);
+        let mut resp = self.call(Request::new("GET", &path).read_timeout(Duration::from_secs(60)))?;
+        let text = resp
+            .read_text(1024 * 1024)
+            .map_err(BridgeError::from_http)?;
+        let v = json::parse(&text)
+            .map_err(|e| BridgeError::Protocol(format!("JSON parse error: {}", e)))?;
+        let r_name = v.str_at(&["name"]).unwrap_or(name).to_string();
+        let connected = v.bool_at(&["connected"]).unwrap_or(false);
+        let enabled = v.bool_at(&["enabled"]).unwrap_or(false);
+        let action = v.str_at(&["action"]).unwrap_or("").to_string();
+        Ok((r_name, connected, enabled, action))
     }
 
     /// 清空服务端会话

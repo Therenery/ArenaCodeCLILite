@@ -89,6 +89,7 @@ pub struct Picker {
 pub enum PickKind {
     Conversation,
     Session,
+    Connector,
 }
 
 impl Picker {
@@ -178,6 +179,9 @@ pub struct App {
     /// 打到 /repo 时预加载的仓库名，用上下键选
     pub repo_list: Vec<String>,
     pub repo_loading: bool,
+    pub repo_loaded_at: Option<Instant>,
+    /// 当前登录邮箱（常驻显示）
+    pub user_email: String,
 }
 
 impl App {
@@ -220,6 +224,8 @@ impl App {
             repo: String::new(),
             repo_list: Vec::new(),
             repo_loading: false,
+            repo_loaded_at: None,
+            user_email: String::new(),
         }
     }
 
@@ -227,6 +233,14 @@ impl App {
 
     pub fn busy(&self) -> bool {
         self.stream.is_some()
+    }
+
+    pub fn is_en(&self) -> bool {
+        self.set.lang == crate::settings::Lang::En
+    }
+
+    pub fn tr<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
+        if self.is_en() { en } else { zh }
     }
 
     pub fn mode(&self) -> Mode {
@@ -764,7 +778,12 @@ impl App {
 
     pub fn on_health(&mut self, res: Result<Health, BridgeError>) {
         self.health = match res {
-            Ok(h) => HealthState::Up(h),
+            Ok(h) => {
+                if !h.user_email.is_empty() {
+                    self.user_email = h.user_email.clone();
+                }
+                HealthState::Up(h)
+            }
             Err(e) => HealthState::Down(e.short().to_string()),
         };
         self.dirty = true;
@@ -794,8 +813,10 @@ impl App {
                 s.name.clone(),
             ));
         }
-        self.picker = Some(Picker::new(PickKind::Session, "桥上的会话", rows));
-        self.notice("↑↓ 选会话，Enter 切过去，Esc 取消");
+        let title = self.tr("桥上的会话", "Bridge sessions").to_string();
+        self.picker = Some(Picker::new(PickKind::Session, title, rows));
+        let hint = self.tr("↑↓ 选会话，Enter 切过去，Esc 取消", "↑↓ select · Enter switch · Esc cancel").to_string();
+        self.notice(hint);
         self.dirty = true;
     }
 
@@ -819,8 +840,10 @@ impl App {
                 (format!("[{}] {}", kind, title), c.url.clone())
             })
             .collect();
-        self.picker = Some(Picker::new(PickKind::Conversation, "网页端会话", rows));
-        self.notice("↑↓ 选会话，Enter 打开，Esc 取消");
+        let title = self.tr("网页端会话", "Web conversations").to_string();
+        self.picker = Some(Picker::new(PickKind::Conversation, title, rows));
+        let hint = self.tr("↑↓ 选会话，Enter 打开，Esc 取消", "↑↓ select · Enter open · Esc cancel").to_string();
+        self.notice(hint);
         self.dirty = true;
     }
 
@@ -829,8 +852,14 @@ impl App {
             PickKind::Conversation => self.open_conversation(&value),
             PickKind::Session => {
                 self.cfg.session = value.clone();
-                self.notice(format!("会话已切到 {}", value));
+                let msg = if self.is_en() {
+                    format!("Switched session to {}", value)
+                } else {
+                    format!("会话已切到 {}", value)
+                };
+                self.notice(msg);
             }
+            PickKind::Connector => self.toggle_connector(&value, None),
         }
     }
 
@@ -855,9 +884,13 @@ impl App {
         }
     }
 
-    /// 读到 /repo 就把仓库名先拉下来，不用等回车
+    /// 读到 /repo 就把仓库名先拉下来，不用等回车（超过 10 秒自动实时重扫）
     pub fn maybe_load_repos(&mut self) {
-        if !self.repo_mode() || self.repo_loading || !self.repo_list.is_empty() {
+        let stale = self
+            .repo_loaded_at
+            .map(|t| t.elapsed() > Duration::from_secs(10))
+            .unwrap_or(true);
+        if !self.repo_mode() || self.repo_loading || (!self.repo_list.is_empty() && !stale) {
             return;
         }
         self.repo_loading = true;
@@ -875,17 +908,25 @@ impl App {
 
     pub fn on_repo_list_failed(&mut self, why: String) {
         self.repo_loading = false;
-        self.notice(format!("读仓库列表失败：{}", why));
+        let msg = if self.is_en() {
+            format!("Failed to load repos: {}", why)
+        } else {
+            format!("读仓库列表失败：{}", why)
+        };
+        self.notice(msg);
     }
 
     pub fn on_repo_list(&mut self, current: String, list: Vec<String>) {
         self.repo_loading = false;
-        self.repo = current.clone();
+        self.repo_loaded_at = Some(Instant::now());
+        if !current.is_empty() {
+            self.repo = current.clone();
+        }
         self.repo_list = list;
         self.suggest_sel = self
             .repo_list
             .iter()
-            .position(|r| *r == current)
+            .position(|r| *r == self.repo)
             .unwrap_or(0);
         self.dirty = true;
     }
@@ -904,16 +945,140 @@ impl App {
         let tx = self.tx.clone();
         let session = self.cfg.session.clone();
         let name = name.to_string();
+        let prev = self.repo.clone();
+        let msg = if self.is_en() {
+            format!("Switching to repo {} …", name)
+        } else {
+            format!("正在切到仓库 {} …", name)
+        };
+        self.notice(msg);
+        std::thread::spawn(move || match client.switch_repo(&name, &session) {
+            Ok(_) => {
+                let _ = tx.send(Msg::RepoSwitched { name });
+            }
+            Err(e) => {
+                let _ = tx.send(Msg::RepoSwitchFailed {
+                    prev,
+                    why: e.short().to_string(),
+                });
+            }
+        });
+    }
+
+    pub fn on_repo_switched(&mut self, name: String) {
         self.blocks.clear();
         self.log.clear();
         self.repo = name.clone();
-        self.push_system(format!("正在切到仓库 {} …", name));
-        std::thread::spawn(move || match client.switch_repo(&name, &session) {
-            Ok(_) => {
-                let _ = tx.send(Msg::Notice(format!("已切到 {}", name)));
+        let sys = if self.is_en() {
+            format!("Switched to repo {}", name)
+        } else {
+            format!("已切到仓库 {}", name)
+        };
+        self.push_system(sys.clone());
+        self.notice(sys);
+        self.dirty = true;
+    }
+
+    pub fn on_repo_switch_failed(&mut self, prev: String, why: String) {
+        self.repo = prev;
+        let msg = if self.is_en() {
+            format!("Switch repo failed: {}", why)
+        } else {
+            format!("切仓库失败：{}", why)
+        };
+        self.notice(msg);
+        self.dirty = true;
+    }
+
+    pub fn list_connectors(&mut self) {
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        let session = self.cfg.session.clone();
+        self.notice(self.tr("正在读取连接器列表…", "Loading connectors…").to_string());
+        std::thread::spawn(move || match client.connectors(&session) {
+            Ok(list) => {
+                let _ = tx.send(Msg::ConnectorList(list));
             }
             Err(e) => {
-                let _ = tx.send(Msg::Notice(format!("切仓库失败：{}", e.short())));
+                let _ = tx.send(Msg::ConnectorListFailed(e.short().to_string()));
+            }
+        });
+    }
+
+    pub fn on_connector_list(&mut self, list: Vec<crate::client::ConnectorInfo>) {
+        if list.is_empty() {
+            self.notice(self.tr("没有读到连接器", "No connectors found").to_string());
+            return;
+        }
+        let en = self.is_en();
+        let rows: Vec<(String, String)> = list
+            .into_iter()
+            .map(|c| {
+                let state = if !c.connected {
+                    if en { "[Connect]" } else { "[未连接]" }
+                } else if c.enabled {
+                    if en { "[ON]" } else { "[开]" }
+                } else {
+                    if en { "[OFF]" } else { "[关]" }
+                };
+                (format!("{:<18} {}", c.name, state), c.name)
+            })
+            .collect();
+        let title = if en { "Connectors" } else { "连接器" };
+        self.picker = Some(Picker::new(PickKind::Connector, title, rows));
+        let hint = if en {
+            "↑↓ select · Enter toggle/connect · Esc cancel"
+        } else {
+            "↑↓ 选择 · Enter 开关/授权 · Esc 取消"
+        };
+        self.notice(hint.to_string());
+        self.dirty = true;
+    }
+
+    pub fn on_connector_list_failed(&mut self, why: String) {
+        let msg = if self.is_en() {
+            format!("Failed to load connectors: {}", why)
+        } else {
+            format!("读连接器失败：{}", why)
+        };
+        self.notice(msg);
+    }
+
+    pub fn toggle_connector(&mut self, name: &str, enable: Option<bool>) {
+        let client = Arc::clone(&self.client);
+        let tx = self.tx.clone();
+        let session = self.cfg.session.clone();
+        let name = name.to_string();
+        let en = self.is_en();
+        self.notice(if en {
+            format!("Updating connector {} …", name)
+        } else {
+            format!("正在操作连接器 {} …", name)
+        });
+        std::thread::spawn(move || match client.toggle_connector(&name, enable, &session) {
+            Ok((nm, connected, enabled, action)) => {
+                let msg = if action == "connect_clicked" {
+                    if en {
+                        format!("Opened browser to connect {}", nm)
+                    } else {
+                        format!("已在浏览器打开 {} 授权页", nm)
+                    }
+                } else if !connected {
+                    if en { format!("{} not connected", nm) } else { format!("{} 未连接", nm) }
+                } else if enabled {
+                    if en { format!("{} enabled", nm) } else { format!("{} 已开启", nm) }
+                } else {
+                    if en { format!("{} disabled", nm) } else { format!("{} 已关闭", nm) }
+                };
+                let _ = tx.send(Msg::Notice(msg));
+            }
+            Err(e) => {
+                let msg = if en {
+                    format!("Connector error: {}", e.short())
+                } else {
+                    format!("连接器操作失败：{}", e.short())
+                };
+                let _ = tx.send(Msg::Notice(msg));
             }
         });
     }
@@ -1076,10 +1241,26 @@ impl App {
             "/health" => self.fetch_health(),
             "/repo" | "/repos" => {
                 if rest.is_empty() {
+                    self.repo_loaded_at = None;
                     self.maybe_load_repos();
-                    self.notice("正在读仓库列表…");
+                    self.notice(self.tr("正在实时刷新仓库列表…", "Refreshing repo list…").to_string());
                 } else {
                     self.switch_repo(&rest);
+                }
+            }
+            "/connectors" => self.list_connectors(),
+            "/connector" => {
+                if rest.is_empty() {
+                    self.list_connectors();
+                } else {
+                    let mut parts = rest.split_whitespace();
+                    let name = parts.next().unwrap_or("");
+                    let en_opt = parts.next().and_then(|s| match s.to_ascii_lowercase().as_str() {
+                        "on" | "1" | "true" | "enable" => Some(true),
+                        "off" | "0" | "false" | "disable" => Some(false),
+                        _ => None,
+                    });
+                    self.toggle_connector(name, en_opt);
                 }
             }
             "/vote" => {
@@ -1319,6 +1500,8 @@ impl App {
             ("/battle", "两栏对战"),
             ("/clear", "清屏"),
             ("/config", "设置面板"),
+            ("/connector", "开关连接器 (GitHub/Drive/Notion…)"),
+            ("/connectors", "列出并开关连接器"),
             ("/direct", "直连模式"),
             ("/exit", "退出"),
             ("/health", "看桥的状态"),

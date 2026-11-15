@@ -8,7 +8,8 @@ use crate::term::Size;
 use crate::theme::{self, Palette, Theme};
 use crate::width::{str_width, wrap};
 
-const USER_PREFIX: &str = "你 › ";
+const USER_PREFIX_ZH: &str = "你 › ";
+const USER_PREFIX_EN: &str = "You › ";
 const BOT_PREFIX: &str = "arena ❯ ";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -172,7 +173,7 @@ pub fn render_rows(app: &mut App, size: Size, th: &Theme) -> Vec<String> {
     app.hit_rows = hit_rows;
     // 右下角「新内容」提示
     if !app.follow && chat_h > 0 && total > chat_h {
-        let tip = "↓ 新内容";
+        let tip = tr(app, "↓ 新内容", "↓ New content");
         let tip_w = str_width(tip);
         if w > tip_w + 2 {
             let row = &mut chat_rows[chat_h - 1];
@@ -300,11 +301,15 @@ fn panel_lines(app: &App, w: usize) -> Vec<Line> {
                 crate::app::HealthState::Up(_) => "◐",
                 _ => "○",
             };
-            let rows: [(&str, String); 8] = [
+            let rows: [(&str, String); 9] = [
                 ("Version", format!("v{}", crate::VERSION)),
                 (if en { "Mode" } else { "模式" }, app.mode().label().to_string()),
                 (if en { "Model" } else { "模型" }, app.model_label()),
                 (if en { "Repo" } else { "仓库" }, app.repo.clone()),
+                (
+                    if en { "User" } else { "用户" },
+                    if app.user_email.is_empty() { "—".to_string() } else { app.user_email.clone() },
+                ),
                 (if en { "Session" } else { "会话" }, app.cfg.session.clone()),
                 (if en { "Bridge" } else { "桥" }, format!("{} {}", app.cfg.base_display, dot)),
                 (
@@ -456,7 +461,7 @@ fn info_line(row: &mut Row, app: &App, th: &Theme, idx: u8, avail: usize) {
         _ => {
             if let Some(st) = &app.stream {
                 if st.verifying {
-                    row.push(th, &fit("⚠ 需要人工验证", avail), Some(Palette::Error), true);
+                    row.push(th, &fit(tr(app, "⚠ 需要人工验证", "⚠ Verify required"), avail), Some(Palette::Error), true);
                 } else {
                     let elapsed = st.started.elapsed().as_secs_f64();
                     let frame = SPINNER[((elapsed * 9.0) as usize) % SPINNER.len()];
@@ -523,7 +528,7 @@ fn status_row(app: &App, w: usize, th: &Theme) -> Row {
     // 先算右侧，左侧按剩余空间逐段裁剪
     let mut right = Row::new();
     if verifying {
-        right.push(th, "⚠ 需要人工验证", Some(Palette::Error), true);
+        right.push(th, tr(app, "⚠ 需要人工验证", "⚠ Verify required"), Some(Palette::Error), true);
     } else if let Some(st) = &app.stream {
         let elapsed = st.started.elapsed().as_secs_f64();
         let frame = SPINNER[((elapsed * 9.0) as usize) % SPINNER.len()];
@@ -535,7 +540,7 @@ fn status_row(app: &App, w: usize, th: &Theme) -> Row {
         if h.queue > 0 || h.working {
             right.push(
                 th,
-                &format!("队列 {}/{}", h.queue, h.max_queue),
+                &format!("{} {}/{}", tr(app, "队列", "Queue"), h.queue, h.max_queue),
                 Some(Palette::Dim),
                 false,
             );
@@ -550,9 +555,9 @@ fn status_row(app: &App, w: usize, th: &Theme) -> Row {
             if h.ok && h.chrome {
                 ("●", Palette::Good, String::new())
             } else if h.ok {
-                ("○", Palette::Warn, "Chrome 未启动".to_string())
+                ("○", Palette::Warn, tr(app, "Chrome 未启动", "Chrome down").to_string())
             } else {
-                ("○", Palette::Error, "桥不通".to_string())
+                ("○", Palette::Error, tr(app, "桥不通", "Bridge down").to_string())
             }
         }
         HealthState::Down(why) => ("○", Palette::Error, why.clone()),
@@ -649,9 +654,9 @@ fn list_rows(app: &App, w: usize, th: &Theme) -> Vec<String> {
     if app.repo_mode() {
         if app.repo_list.is_empty() {
             let msg = if app.repo_loading {
-                "正在读仓库列表…"
+                tr(app, "正在读仓库列表…", "Loading repos…")
             } else {
-                "还没有仓库，/repo owner/name 手动切"
+                tr(app, "还没有仓库，/repo owner/name 手动切", "No repos yet; type /repo owner/name")
             };
             out.push(format!("  {}", th.dim(msg)));
             return out;
@@ -663,7 +668,7 @@ fn list_rows(app: &App, w: usize, th: &Theme) -> Vec<String> {
             let cur = *name == app.repo;
             let mark = if i == sel { "❯ " } else { "  " };
             let text = if cur {
-                format!("{}  ← 当前", name)
+                format!("{}  ← {}", name, tr(app, "当前", "current"))
             } else {
                 name.clone()
             };
@@ -791,14 +796,31 @@ fn input_rows(
     } else {
         (String::new(), Palette::Dim)
     };
+    let user_label = if app.user_email.is_empty() {
+        String::new()
+    } else {
+        format!(" {} ", app.user_email)
+    };
+    let user_w = str_width(&user_label);
     let label_w = str_width(&repo_label);
-    if label_w == 0 || label_w + 6 > w {
+    let show_user = user_w > 0 && user_w + label_w + 8 <= w;
+    let show_repo = label_w > 0 && label_w + 6 <= w;
+    if !show_user && !show_repo {
         out.push(th.dim(&repeat('─', w)));
     } else {
         let mut row = Row::new();
-        row.push(th, &repeat('─', w - label_w - 2), Some(Palette::Dim), false);
-        row.push(th, &repo_label, Some(repo_pal), false);
-        row.push(th, "──", Some(Palette::Dim), false);
+        if show_user {
+            row.push(th, "──", Some(Palette::Dim), false);
+            row.push(th, &user_label, Some(Palette::Dim), false);
+        }
+        let used_left = if show_user { 2 + user_w } else { 0 };
+        let used_right = if show_repo { label_w + 2 } else { 0 };
+        let mid = w.saturating_sub(used_left + used_right);
+        row.push(th, &repeat('─', mid), Some(Palette::Dim), false);
+        if show_repo {
+            row.push(th, &repo_label, Some(repo_pal), false);
+            row.push(th, "──", Some(Palette::Dim), false);
+        }
         out.push(row.styled);
     }
 
@@ -905,7 +927,7 @@ fn build_lines(app: &App, w: usize) -> Vec<Line> {
                 push_prefixed(
                     &mut out,
                     &crate::width::sanitize(text),
-                    USER_PREFIX,
+                    tr(app, USER_PREFIX_ZH, USER_PREFIX_EN),
                     4,
                     w,
                     Palette::User,

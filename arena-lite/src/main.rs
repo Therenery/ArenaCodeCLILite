@@ -843,12 +843,16 @@ fn handle_msg(app: &mut App, msg: Msg, out: &mut std::io::Stdout) {
         Msg::SessionList(list) => app.on_session_list(list),
         Msg::RepoList { current, list } => app.on_repo_list(current, list),
         Msg::RepoListFailed(why) => app.on_repo_list_failed(why),
+        Msg::RepoSwitched { name } => app.on_repo_switched(name),
+        Msg::RepoSwitchFailed { prev, why } => app.on_repo_switch_failed(prev, why),
         Msg::RepoCurrent(cur) => app.on_repo_current(cur),
+        Msg::ConnectorList(list) => app.on_connector_list(list),
+        Msg::ConnectorListFailed(why) => app.on_connector_list_failed(why),
         Msg::ConversationList(list) => app.on_conversation_list(list),
         Msg::UploadPicked(res) => match res {
-            Ok(files) if files.is_empty() => app.notice("已取消"),
+            Ok(files) if files.is_empty() => app.notice(app.tr("已取消", "Cancelled").to_string()),
             Ok(files) => app.upload_files(files),
-            Err(e) => app.notice(format!("选文件失败：{}", e)),
+            Err(e) => app.notice(format!("{}{}", app.tr("选文件失败：", "File picker failed: "), e)),
         },
         Msg::Notice(text) => app.notice(text),
     }

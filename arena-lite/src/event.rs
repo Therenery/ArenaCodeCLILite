@@ -1,6 +1,6 @@
 //! 主循环收到的消息。键盘、网络、健康检查都汇到这一个管道里。
 
-use crate::client::{Conversation, Health, History, StreamEvent};
+use crate::client::{ConnectorInfo, Conversation, Health, History, StreamEvent};
 use crate::err::BridgeError;
 use crate::keys::Key;
 
@@ -30,8 +30,12 @@ pub enum Msg {
     SessionList(Vec<SessionInfo>),
     RepoList { current: String, list: Vec<String> },
     RepoListFailed(String),
+    RepoSwitched { name: String },
+    RepoSwitchFailed { prev: String, why: String },
     /// 只更新「当前仓库」，不弹列表
     RepoCurrent(String),
+    ConnectorList(Vec<ConnectorInfo>),
+    ConnectorListFailed(String),
     /// 网页端左侧栏的会话列表（/resume）
     ConversationList(Vec<Conversation>),
     /// 系统选文件窗口的结果（/upload 不带参数）
