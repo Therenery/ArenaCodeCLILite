@@ -5,12 +5,15 @@
  * passively tap the page's own fetch stream. No cookies stored, no tokens minted.
  */
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { exec, spawn } = require('child_process');
 const { parseFrame } = require('./lib/parse');
 
-const VERSION = '0.4.4';
+const VERSION = '0.5.0';
+let authUserCache = null;
+let modelCatalogCache = { at: 0, byArena: {} };
 const CDP_PORT = 9222;
 const PORT = 17892;
 const HOST = '127.0.0.1';
@@ -69,7 +72,7 @@ async function realClick(c, p) {
   await sleep(70);
   await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 });
 }
-const CHIP_POS_JS = "(function(){var b=[].slice.call(document.querySelectorAll('button')).filter(function(x){var t=(x.innerText||'').trim();return t.length>2&&t.length<60&&t.indexOf('/')>0&&t.indexOf(' ')<0})[0];if(!b)return '';var r=b.getBoundingClientRect();if(!r.width)return '';return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()";
+const CHIP_POS_JS = "(function(){var bs=[].slice.call(document.querySelectorAll('button'));var b=bs.find(function(x){var t=(x.textContent||'').trim();var r=x.getBoundingClientRect();return r.width>0&&r.height>0&&((t.length>2&&t.length<60&&/^[\\w.-]+\\/[\\w.-]+$/.test(t))||/Select a rep/i.test(t))});if(!b)return '';var r=b.getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()";
 const ADD_BTN_POS_JS = "(function(){var es=[].slice.call(document.querySelectorAll('[aria-label]')).filter(function(x){return /Add files and connections/i.test(x.getAttribute('aria-label')||'')});for(var i=0;i<es.length;i++){var r=es[i].getBoundingClientRect();if(r.width>0&&r.height>0)return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})}return ''})()";
 // 文件框还没进 DOM 时，点一下「Add files and connections」把它逼出来。
 // 点之前先拦下文件选择框：不然 Windows 原生对话框会弹出来卡在那儿，人也看得见。
@@ -92,11 +95,11 @@ async function clickAttach(c) {
 const SEL_TAB_POS_JS = "(function(){function inOpen(e){var p=e;for(var i=0;i<8&&p;i++){var st=p.getAttribute&&p.getAttribute('data-state');if(st==='open')return true;p=p.parentElement}return false}var els=[].slice.call(document.querySelectorAll('span,button,div'));for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.children.length>1)continue;if((e.innerText||'').trim()!=='Select a repository')continue;var r=e.getBoundingClientRect();if(r.width<4||r.height<4)continue;if(!inOpen(e))continue;var px=Math.round(r.left+r.width/2),py=Math.round(r.top+r.height/2);var h=document.elementFromPoint(px,py);for(var k=0;k<4&&h;k++){if((h.innerText||'').trim()==='Select a repository')return JSON.stringify({x:px,y:py});h=h.parentElement}}return ''})()";
 const OUTER_GH_POS_JS = "(function(){var best=null;[].slice.call(document.querySelectorAll('span,button,div')).forEach(function(e){if(e.children.length>1)return;if((e.innerText||'').trim()!=='GitHub')return;var r=e.getBoundingClientRect();if(r.width<4||r.height<4)return;var q=e,st='';for(var i=0;i<8&&q;i++){var s=q.getAttribute&&q.getAttribute('data-state');if(s){st=s;break}q=q.parentElement}if(st==='open')return;var px=Math.round(r.left+r.width/2),py=Math.round(r.top+r.height/2);var h=document.elementFromPoint(px,py);for(var k=0;k<4&&h;k++){if((h.innerText||'').trim()==='GitHub'){best={x:px,y:py};return}h=h.parentElement}});return best?JSON.stringify(best):''})()";
 const GH_ITEM_POS_JS = "(function(){function inOpen(e){var p=e;for(var i=0;i<8&&p;i++){var st=p.getAttribute&&p.getAttribute('data-state');if(st==='open')return true;p=p.parentElement}return false}var els=[].slice.call(document.querySelectorAll('span,button,div'));var anchor=null;for(var i=0;i<els.length;i++){var e=els[i];if(e.children.length>1)continue;if((e.innerText||'').trim()!=='Connectors')continue;var r=e.getBoundingClientRect();if(r.width<4||r.height<4)continue;if(!inOpen(e))continue;anchor=r;break}if(!anchor)return '';for(var j=0;j<els.length;j++){var x=els[j];if(x.children.length>1)continue;if((x.innerText||'').trim()!=='GitHub')continue;var q=x.getBoundingClientRect();if(q.width<4||q.height<4)continue;if(Math.abs(q.top-anchor.top)>12)continue;var px=Math.round(q.left+q.width/2),py=Math.round(q.top+q.height/2);var h=document.elementFromPoint(px,py);for(var k=0;k<4&&h;k++){if((h.innerText||'').trim()==='GitHub')return JSON.stringify({x:px,y:py});h=h.parentElement}break}return ''})()";
-const DIALOG_OPEN_JS = "(function(){var d=document.querySelector('[role=dialog],[role=menu]');return d?'1':'0'})()";
+const DIALOG_OPEN_JS = "(function(){var ds=[].slice.call(document.querySelectorAll('[role=dialog],[role=menu],[role=listbox]'));return ds.some(function(d){var r=d.getBoundingClientRect();return r.width>0&&r.height>0})?'1':'0'})()";
 const OPEN_PICKER_JS = "(function(){var fire=function(el){var r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;var o={bubbles:true,cancelable:true,clientX:x,clientY:y,view:window,button:0,buttons:1,pointerId:1,isPrimary:true,pointerType:'mouse'};el.dispatchEvent(new PointerEvent('pointerdown',o));el.dispatchEvent(new MouseEvent('mousedown',o));el.dispatchEvent(new PointerEvent('pointerup',o));el.dispatchEvent(new MouseEvent('mouseup',o));el.dispatchEvent(new MouseEvent('click',o));};var b=[].slice.call(document.querySelectorAll('button')).filter(function(x){return /^[\\w.-]+\\/[\\w.-]+$/.test((x.innerText||'').trim())})[0];if(b){fire(b);return 'OK'}var g=[].slice.call(document.querySelectorAll('[aria-label]')).filter(function(x){return (x.getAttribute('aria-label')||'')==='GitHub'})[0];if(g){fire(g);return 'CLICKED_GITHUB'}return 'NO_CHIP'})()";
-const LIST_REPOS_JS = "(function(){var d=document.querySelector('[role=dialog],[role=menu]');if(!d)return JSON.stringify({open:false,items:[]});var out=[];[].slice.call(d.querySelectorAll('*')).forEach(function(x){if(x.children.length>2)return;var t=(x.innerText||'').trim();if(!/^[\\w.-]+\\/[\\w.-]+$/.test(t))return;if(out.indexOf(t)<0)out.push(t)});return JSON.stringify({open:true,items:out})})()";
-const CHIP_TEXT_JS = "(function(){var b=[].slice.call(document.querySelectorAll('button')).filter(function(x){return /^[\\w.-]+\\/[\\w.-]+$/.test((x.innerText||'').trim())})[0];return b?(b.innerText||'').trim():''})()";
-const repoPosJs = name => "(function(){var d=document.querySelector('[role=dialog]');if(!d)return '';var nm=" + JSON.stringify(name) + ";var es=[].slice.call(d.querySelectorAll('*')).filter(function(x){return (x.innerText||'').trim()===nm});if(!es.length)return '';var e=es[es.length-1];try{e.scrollIntoView({block:'center',inline:'nearest'})}catch(err){try{e.scrollIntoView()}catch(e2){}}var r=e.getBoundingClientRect();var px=Math.round(r.left+r.width/2),py=Math.round(r.top+r.height/2);if(py<4||py>innerHeight-4)return '';var h=document.elementFromPoint(px,py);for(var k=0;k<5&&h;k++){if((h.innerText||'').trim()===nm)return JSON.stringify({x:px,y:py});h=h.parentElement}return ''})()";
+const LIST_REPOS_JS = "(function(){var cs=[].slice.call(document.querySelectorAll('[role=listbox],[role=dialog],[role=menu]'));for(var i=0;i<cs.length;i++){var d=cs[i];var r=d.getBoundingClientRect();if(r.width<=0||r.height<=0)continue;var out=[];[].slice.call(d.querySelectorAll('*')).forEach(function(x){if(x.children.length>2)return;var t=(x.textContent||'').trim();if(!/^[\\w.-]+\\/[\\w.-]+$/.test(t))return;if(out.indexOf(t)<0)out.push(t)});if(out.length)return JSON.stringify({open:true,items:out})}return JSON.stringify({open:false,items:[]})})()";
+const CHIP_TEXT_JS = "(function(){var b=[].slice.call(document.querySelectorAll('button')).find(function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0&&/^[\\w.-]+\\/[\\w.-]+$/.test((x.textContent||'').trim())});return b?(b.textContent||'').trim():''})()";
+const repoPosJs = name => "(function(){var nm=" + JSON.stringify(name) + ";var cs=[].slice.call(document.querySelectorAll('[role=listbox],[role=dialog],[role=menu]'));for(var ci=0;ci<cs.length;ci++){var d=cs[ci];var dr=d.getBoundingClientRect();if(dr.width<=0||dr.height<=0)continue;var es=[].slice.call(d.querySelectorAll('*')).filter(function(x){return x.children.length<=2&&(x.textContent||'').trim()===nm});if(!es.length)continue;var e=es[es.length-1];try{e.scrollIntoView({block:'center',inline:'nearest'})}catch(err){try{e.scrollIntoView()}catch(e2){}}var r=e.getBoundingClientRect();if(r.width<=0||r.height<=0)continue;var px=Math.round(r.left+r.width/2),py=Math.round(r.top+r.height/2);if(py>=4&&py<=innerHeight-4)return JSON.stringify({x:px,y:py});}return ''})()";
 
 /* ---------- CDP plumbing ---------- */
 function cdpApi(method, path) {
@@ -164,7 +167,7 @@ const INJECT = String.raw`
   window.__arbInstalled = true;
   window.__arbSeq = 0;
   window.__arbStreams = [];
-  const interesting = u => /nextjs-api\/stream|ai-proxy\/realtime/i.test(u);
+  const interesting = u => /nextjs-api\/stream|ai-proxy\/realtime|\/api\/chat\/[^/]+\/events/i.test(u);
   const push = (st, o) => {
     try { st.frames.push(o); if (st.frames.length > 30000) { st.frames.splice(0, 10000); st.base = (st.base || 0) + 10000; } } catch (e) {}
   };
@@ -342,25 +345,154 @@ async function ensureChrome() {
 }
 
 const VERIFY_JS = "(()=>{try{var t=document.body.innerText||'';return /Just a moment|Verify you are human|确认您是真人|Checking your browser|Attention Required/i.test(t)||!!document.querySelector('iframe[src*=challenges.cloudflare.com],#challenge-form,#challenge-stage')}catch(e){return false}})()";
+// 助手回复里的图片：arena 把沙盒产出的文件以 data: URL 的 <img> 塞进正文，
+// 外链图也一并收。头像（24px 的 googleusercontent）按尺寸过滤掉。
+const IMAGES_JS = String.raw`(async function(){
+  function ok(im){
+    var src = String(im.currentSrc || im.src || '');
+    if (!/^data:image\//.test(src) && !/^https?:\/\//.test(src)) return false;
+    if (/googleusercontent\.com\/a\//.test(src)) return false;
+    var r = im.getBoundingClientRect();
+    var w = im.naturalWidth || r.width, h = im.naturalHeight || r.height;
+    return Math.max(w, h) >= 64;
+  }
+  function toDataUrl(src){
+    if (/^data:/.test(src)) return Promise.resolve(src);
+    return fetch(src, {credentials:'include'}).then(function(r){ return r.blob(); }).then(function(b){
+      return new Promise(function(res, rej){
+        var fr = new FileReader();
+        fr.onload = function(){ res(String(fr.result || '')); };
+        fr.onerror = function(){ rej(new Error('read failed')); };
+        fr.readAsDataURL(b);
+      });
+    });
+  }
+  var turns = [].slice.call(document.querySelectorAll('[data-agent-transcript-message="true"]'));
+  var root = turns.length ? turns[turns.length - 1] : document.body;
+  var imgs = [].slice.call(root.querySelectorAll('img')).filter(ok);
+  var out = [];
+  for (var i = 0; i < imgs.length && out.length < 6; i++) {
+    try {
+      var d = await toDataUrl(String(imgs[i].currentSrc || imgs[i].src || ''));
+      var m = d.match(/^data:([^;,]+)[^,]*,(.*)$/);
+      if (!m || m[2].length > 12000000) continue;
+      out.push({ name: (imgs[i].alt || '').slice(0, 80), mime: m[1], data: m[2] });
+    } catch (e) {}
+  }
+  return JSON.stringify(out);
+})()`;
+
+const HAS_IMG_JS = "(()=>{var t=[].slice.call(document.querySelectorAll('[data-agent-transcript-message=\"true\"]'));var r=t.length?t[t.length-1]:document.body;return [].slice.call(r.querySelectorAll('img')).some(function(im){var q=im.getBoundingClientRect();return Math.max(im.naturalWidth||q.width,im.naturalHeight||q.height)>=64})})()";
+
+// 图有时比文字晚一步渲染，头几次没抓到就等一会儿再看
+async function collectImages(c) {
+  for (let i = 0; i < 4; i++) {
+    try {
+      if (await c.ev(HAS_IMG_JS)) {
+        const raw = await c.ev(IMAGES_JS);
+        if (raw && raw.charAt(0) === '[') {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list) && list.length) return list;
+        }
+      }
+    } catch (e) {}
+    await sleep(400);
+  }
+  return [];
+}
+
+// 把一组图片 URL 在页面里抓成 base64：r2 的图走浏览器最省事，cookie 都现成
+// R2 的图在页面里 fetch 会被 CORS 拦，退回 Node 直接下
+function downloadImage(u, depth) {
+  depth = depth || 0;
+  return new Promise((resolve) => {
+    if (depth > 3) return resolve(null);
+    let mod;
+    try { mod = new URL(u).protocol === 'https:' ? https : http; } catch (e) { return resolve(null); }
+    const req = mod.get(u, { timeout: 20000, headers: { accept: 'image/*,*/*' } }, (res) => {
+      const code = res.statusCode || 0;
+      if (code >= 300 && code < 400 && res.headers.location) {
+        res.resume();
+        return resolve(downloadImage(new URL(res.headers.location, u).toString(), depth + 1));
+      }
+      if (code !== 200) { res.resume(); return resolve(null); }
+      const mime = String(res.headers['content-type'] || '').split(';')[0].trim();
+      const chunks = [];
+      let len = 0;
+      res.on('data', (d) => {
+        len += d.length;
+        if (len > 12000000) { req.destroy(); resolve(null); return; }
+        chunks.push(d);
+      });
+      res.on('end', () => {
+        if (!/^image\//i.test(mime)) return resolve(null);
+        resolve({ mime, data: Buffer.concat(chunks).toString('base64') });
+      });
+      res.on('error', () => resolve(null));
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function grabImages(c, urls) {
+  const list = (urls || []).filter(u => /^https?:|^data:/.test(String(u))).slice(0, 6);
+  if (!list.length) return [];
+  const js = '(async function(){var urls=' + JSON.stringify(list) + ';var out=[];for(var i=0;i<urls.length;i++){try{var r=await fetch(urls[i],{credentials:"include"});var b=await r.blob();var d=await new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(String(fr.result||""))};fr.onerror=rej;fr.readAsDataURL(b)});var m=d.match(/^data:([^;,]+)[^,]*,(.*)$/);if(m&&m[2].length<=12000000)out.push({mime:m[1],data:m[2]})}catch(e){}}return JSON.stringify(out)})()';
+  try {
+    const raw = await c.ev(js);
+    const arr = raw && raw.charAt(0) === '[' ? JSON.parse(raw) : [];
+    if (Array.isArray(arr) && arr.length) return arr;
+  } catch (e) {}
+  const out = [];
+  for (const u of list) {
+    if (u.slice(0, 5) === 'data:') {
+      const m = u.match(/^data:([^;,]+)[^,]*,(.*)$/);
+      if (m) out.push({ mime: m[1], data: m[2] });
+      continue;
+    }
+    const im = await downloadImage(u);
+    if (im) out.push(im);
+  }
+  return out;
+}
+
 const EDITOR_SEL = `document.querySelector('textarea[name=message]')||document.querySelector('.ProseMirror[contenteditable="true"]')`;
 const READY_JS = `!!(${EDITOR_SEL})`;
 const VAL_JS = `(function(){var e=${EDITOR_SEL};if(!e)return 0;var v=(e.value!==undefined?e.value:(e.innerText||''));return String(v).replace(/[\s\u00a0\u200b]/g,'').length})()`;
 
 
 // 左侧栏的会话列表：每个会话是一个指向 /agent/<uuid> 或 /c/<uuid> 的链接
-const CONVERSATIONS_JS = String.raw`JSON.stringify((function(){
+const CONVERSATIONS_JS = String.raw`(async function(){
   var out=[], seen={};
-  var as=[].slice.call(document.querySelectorAll('a[href]'));
-  as.forEach(function(a){
-    var h=a.getAttribute('href')||'';
-    var m=h.match(/^\/(agent|c)\/([0-9a-f-]{8,})/i);
-    if(!m||seen[h]) return;
-    seen[h]=1;
-    var t=String(a.innerText||'').replace(/\u00a0/g,' ').trim().split('\n')[0].trim();
-    out.push({id:m[2], url:h, kind:m[1], title:t.slice(0,120)});
-  });
-  return {ok:true, conversations:out.slice(0,60), url:location.href};
-})())`;
+  try {
+    var r = await fetch('/api/history/unified?limit=40&includeArchived=false', {credentials:'include'});
+    if (r && r.ok) {
+      var j = await r.json();
+      var es = (j && j.entries) || [];
+      es.forEach(function(e){
+        if (!e || !e.id) return;
+        var kind = e.type === 'agentic' ? 'agent' : 'c';
+        var h = '/' + kind + '/' + e.id;
+        if (seen[h]) return;
+        seen[h] = 1;
+        out.push({id:e.id, url:h, kind:kind, title:String(e.title||'').trim().slice(0,120)});
+      });
+    }
+  } catch (e) {}
+  if (!out.length) {
+    var as=[].slice.call(document.querySelectorAll('a[href]'));
+    as.forEach(function(a){
+      var h=a.getAttribute('href')||'';
+      var m=h.match(/^\/(agent|c)\/([0-9a-f-]{8,})/i);
+      if(!m||seen[h]) return;
+      seen[h]=1;
+      var t=String(a.innerText||'').replace(/\u00a0/g,' ').trim().split('\\n')[0].trim();
+      out.push({id:m[2], url:h, kind:m[1], title:t.slice(0,120)});
+    });
+  }
+  return JSON.stringify({ok:true, conversations:out.slice(0,60), url:location.href});
+})()`;
 
 // 从当前页面读对话。Agent 页有明确的角色属性；/c/ 页只有气泡样式，按气泡对齐猜。
 //
@@ -557,22 +689,53 @@ function needVerify(c) {
   return new Error('NEED_VERIFY');
 }
 
+// arena 新版模式选择是 button[aria-label="Mode"]（只有 Chat / Agent 两项）；兼容旧版 Battle/Direct/Side
+const MODE_BTN_JS = "(function(){var b=document.querySelector('button[aria-label=\"Mode\"]');if(b){var r=b.getBoundingClientRect();if(r.width>4)return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2),t:(b.innerText||'').trim()})}var bs=[].slice.call(document.querySelectorAll('button[role=combobox]'));for(var i=0;i<bs.length;i++){var t=(bs[i].innerText||'').trim();if(/^(Agent|Chat|Battle|Direct|Side)/i.test(t)){var r2=bs[i].getBoundingClientRect();if(r2.width>4)return JSON.stringify({x:Math.round(r2.left+r2.width/2),y:Math.round(r2.top+r2.height/2),t:t})}}return ''})()";
+
+async function setMode(c, mode) {
+  const isAgent = mode === 'agent';
+  const legacyWant = { battle: 'Battle', agent: 'Agent', direct: 'Direct', side: 'Side' }[mode];
+  const newWant = isAgent ? 'Agent' : 'Chat';
+  if (!legacyWant) return false;
+  for (let i = 0; i < 3; i++) {
+    const raw = await c.ev(MODE_BTN_JS).catch(() => '');
+    if (raw && raw.charAt(0) === '{') {
+      const p = JSON.parse(raw);
+      if (new RegExp('^(' + legacyWant + '|' + newWant + ')$', 'i').test(p.t)) return false;
+      await realClick(c, p);
+      await sleep(700);
+      const ok = await c.ev("(function(){var ws=[" + JSON.stringify(legacyWant) + "," + JSON.stringify(newWant) + "];var os=[].slice.call(document.querySelectorAll('[role=option]'));for(var k=0;k<ws.length;k++){for(var i=0;i<os.length;i++){var t=(os[i].innerText||'').trim();if(t.indexOf(ws[k])===0){os[i].click();return 'ok'}}}return ''})()").catch(() => '');
+      await sleep(900);
+      if (ok === 'ok') return true;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 async function openTab(model, mode, models, navUrl) {
   const q = [];
-  if (model && !/^arena-/.test(model)) q.push('model_a=' + encodeURIComponent(model));
+  if (model && !/^arena-/.test(model) && !/^(auto|router)$/i.test(model)) q.push('model_a=' + encodeURIComponent(model));
   let base = '/agent';
   if (mode === 'direct') base = '/text/direct';
   else if (mode === 'side') {
     base = '/text/side-by-side';
-    if (models && models[0]) q.push('model_a=' + encodeURIComponent(models[0]));
-    if (models && models[1]) q.push('model_b=' + encodeURIComponent(models[1]));
+    let pair = Array.isArray(models) ? models.filter(Boolean).slice(0, 2) : [];
+    if (pair.length < 2) {
+      const live = (modelCatalogCache.byArena && modelCatalogCache.byArena.text) || [];
+      const fallback = live.length >= 2 ? live.slice(0, 2) : ['gemini-3.8-flash-high', 'deepseek-v4.1-flash-high'];
+      for (const m of fallback) { if (pair.length < 2 && !pair.includes(m)) pair.push(m); }
+    }
+    if (pair[0]) q.push('model_a=' + encodeURIComponent(pair[0]));
+    if (pair[1]) q.push('model_b=' + encodeURIComponent(pair[1]));
   } else if (mode === 'battle') {
-    // 对战没有独立路由：首页的 Mode 下拉里选 Battle
+    // 首页默认即为匿名双栏 Battle
     base = '/';
   }
   const url = navUrl || ('https://arena.ai' + base + (q.length ? '?' + q.join('&') : ''));
   // 对战 / 并排每一轮都是独立会话，接管旧页面会把上一轮的问答带进来
-  const adopted = (navUrl || mode === 'battle' || mode === 'side') ? null : await adoptTab(base);
+  const adopted = (navUrl || mode === 'battle' || mode === 'side' || (mode === 'direct' && q.length)) ? null : await adoptTab(base);
   if (adopted) {
     log('adopted tab', adopted.tabId, String(adopted.url).slice(0, 60));
     minimizeChrome();
@@ -580,15 +743,25 @@ async function openTab(model, mode, models, navUrl) {
   }
   const tab = await cdpApi('PUT', '/json/new?' + encodeURIComponent('about:blank'));
   if (!tab || !tab.id) throw new Error('cannot create tab: ' + JSON.stringify(tab).slice(0, 120));
-  const c = await connectTab(tab.id);
-  await c.send('Page.addScriptToEvaluateOnNewDocument', { source: INJECT });
-  await c.send('Page.navigate', { url });
-  // 打开已有会话时要等历史渲染完，比空白页慢
-  await waitReady(c, navUrl ? 45000 : undefined);
-  if (mode === 'battle') {
-    // 首页默认就是 battle，但用户上次选过别的模式时要显式切回来
-    await c.ev("(function(){var s=document.querySelector('select');if(!s||s.value==='battle')return;var d=Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype,'value');d.set.call(s,'battle');s.dispatchEvent(new Event('change',{bubbles:true}));})()").catch(() => {});
-    await sleep(1200);
+  let c;
+  try {
+    c = await connectTab(tab.id);
+    await c.send('Page.addScriptToEvaluateOnNewDocument', { source: INJECT });
+    await c.send('Page.navigate', { url });
+    // 打开已有会话时要等历史渲染完，比空白页慢
+    await waitReady(c, navUrl ? 45000 : undefined);
+    if (mode) {
+      // 上次用过的模式会被记住，显式切回来（仅当实际切换了才再等）
+      const changed = await setMode(c, mode);
+      if (changed) {
+        await sleep(600);
+        await waitReady(c);
+      }
+    }
+  } catch (err) {
+    try { if (c) c.close(); } catch (_) {}
+    try { await cdpApi('GET', '/json/close/' + tab.id); } catch (_) {}
+    throw err;
   }
   log('tab ready', tab.id, url);
   minimizeChrome();
@@ -665,6 +838,7 @@ async function typePrompt(c, text) {
   const body = text.slice(0, MAX_PROMPT_CHARS);
   const want = body.replace(/[\s\u00a0\u200b]/g, '').length;
   // 一次插入整段：逐字符发键事件要几十秒，长 prompt 期间页面容易自己跳走
+  await c.ev("(function(){var e=" + EDITOR_SEL + ";if(e)e.focus()})()").catch(() => {});
   await c.send('Input.insertText', { text: body });
   await sleep(500);
   let n = await c.ev(VAL_JS);
@@ -687,7 +861,10 @@ async function typePrompt(c, text) {
     await sleep(1200);
     ok = (await c.ev(VAL_JS)) <= 1;
   }
-  if (!ok) throw new Error('send failed (composer still holds text)');
+  if (!ok) {
+    if (await c.ev(VERIFY_JS).catch(() => false)) throw needVerify(c);
+    throw new Error('send failed (composer still holds text)');
+  }
 }
 
 
@@ -711,7 +888,7 @@ async function stopGeneration(c) {
 async function listStreams(c) {
   // n 是绝对帧号（base + 本流帧数），和 readFrames 返回的 n 同一坐标系；
   // 之前这里用的是相对帧数，流被裁剪过（base>0）时游标会对不上，正文重复一遍
-  const v = await c.evJson("(function(){return JSON.stringify((window.__arbStreams||[]).map(function(s){return {id:s.id,u:s.u,t:s.t,n:(s.base||0)+s.frames.length,done:!!s.done}}))})()");
+  const v = await c.evJson("(function(){return JSON.stringify((window.__arbStreams||[]).map(function(s){return {id:s.id,u:s.u,status:s.status||0,t:s.t,n:(s.base||0)+s.frames.length,done:!!s.done}}))})()");
   return v || [];
 }
 async function readFrames(c, sid, from) {
@@ -828,6 +1005,7 @@ async function askOnce(s, prompt, onDelta, ctx) {
   const preList = (await listStreams(c)) || [];
   const pre = new Map(preList.map(x => [x.id, x.n]));
   const sendTs = Date.now();
+  await c.send('Page.bringToFront').catch(() => {});
   await typePrompt(c, prompt);
   const t0 = Date.now();
   let text = '', reasoning = '', done = false, routed = '', tick = 0, doneNoTextAt = 0, doneSeen = false;
@@ -856,7 +1034,7 @@ async function askOnce(s, prompt, onDelta, ctx) {
     // 客户端已经断开（Ctrl-C）：任务没必要继续跑，占着全局队列
     if (aborted()) { throw Object.assign(new Error('aborted by client'), { aborted: true }); }
     const now = (await listStreams(c)) || [];
-    const cand = now.filter(x => /create-evaluation|create-chat|realtime|ai-proxy/.test(x.u) && (x.t >= sendTs - 1500 || pre.has(x.id)));
+    const cand = now.filter(x => /create-evaluation|create-chat|realtime|ai-proxy|\/api\/chat\/[^/]+\/events/.test(x.u) && (x.t >= sendTs - 1500 || pre.has(x.id)));
     if (++tick % 30 === 0) log('poll', JSON.stringify({ cur: [...cursors], len: text.length, streams: now.length, done }));
     if (!cand.length) {
       if (await c.ev(VERIFY_JS)) throw needVerify(c);
@@ -865,7 +1043,8 @@ async function askOnce(s, prompt, onDelta, ctx) {
         if (left <= 1) {
           sendRetries++;
           log('no stream after ' + Math.round((Date.now() - lastSendAt) / 1000) + 's, re-sending #' + sendRetries);
-          try { await typePrompt(c, prompt); } catch (e) { log('re-send failed', e.message); }
+          try { await c.send('Page.bringToFront').catch(() => {});
+  await typePrompt(c, prompt); } catch (e) { log('re-send failed', e.message); }
           lastSendAt = Date.now();
           continue;
         }
@@ -881,6 +1060,7 @@ async function askOnce(s, prompt, onDelta, ctx) {
       if (r.f && r.f.length) {
         cursors.set(st.id, r.n); lastFrameAt = Date.now();
         for (const f of r.f) {
+          if ((st.status === 403 && /create-chat|create-evaluation/.test(st.u)) || (f.l && /recaptcha validation failed/i.test(f.l))) throw needVerify(c);
           if (applyFrame(f).out) st.hasOut = true;
         }
       }
@@ -897,13 +1077,14 @@ async function askOnce(s, prompt, onDelta, ctx) {
   }
   if (!text.trim()) throw new Error('empty answer from upstream');
   dismissReviewSoon(c);
-  return { text, reasoning, routed, done, tools };
+  const images = await collectImages(c);
+  return { text, reasoning, routed, done, tools, images };
 }
 
 /* ---------- battle / side-by-side ---------- */
 // 对战页把两个回答并排放在一个 carousel 里，每条是一个子节点：
 // 第一行是「助手 A / 助手 B」（投票后换成真实模型名），下面是正文。
-const BATTLE_PANES_JS = "(function(){var cs=[].slice.call(document.querySelectorAll('div')).filter(function(e){return String(e.className||'').indexOf('@container/carousel')>=0});if(!cs.length)return '';var c=cs[cs.length-1];if(c.childElementCount!==2)return '';function pane(k){var sp=[].slice.call(k.querySelectorAll('span')).map(function(s){return (s.innerText||'').trim()}).filter(Boolean);var t=(k.innerText||'').trim();var lb=sp[0]||'';return {label:lb,text:t.slice(lb.length).trim()}}return JSON.stringify({a:pane(c.children[0]),b:pane(c.children[1])})})()";
+const BATTLE_PANES_JS = "(function(){var cs=[].slice.call(document.querySelectorAll('div')).filter(function(e){return String(e.className||'').indexOf('@container/carousel')>=0});if(!cs.length)return '';var c=cs[cs.length-1];if(c.childElementCount!==2)return '';function pane(k){var sp=[].slice.call(k.querySelectorAll('span')).map(function(s){return (s.innerText||'').trim()}).filter(Boolean);var t=(k.innerText||'').trim();var lb=sp[0]||'';var ims=[].slice.call(k.querySelectorAll('img')).filter(function(im){var s=String(im.currentSrc||im.src||'');if(!/^data:image\\//.test(s)&&!/^https?:/.test(s))return false;if(/googleusercontent\\.com\\/a\\//.test(s))return false;var r=im.getBoundingClientRect();return Math.max(im.naturalWidth||r.width,im.naturalHeight||r.height)>=64}).map(function(im){return String(im.currentSrc||im.src||'')});var tx=t.slice(lb.length).trim().split('\\n').map(function(x){return x.trim()}).filter(function(x){return x&&x!=='Edit'&&x!=='Copy'&&x!=='Retry'}).join('\\n').trim();return {label:lb,text:tx,images:ims}}return JSON.stringify({a:pane(c.children[0]),b:pane(c.children[1])})})()";
 const VOTE_READY_JS = "(()=>{var re=/^(A\s*更好|B\s*更好|都好|都不好|A is better|B is better|Tie|Both are bad|Both are good)$/i;var bs=[].slice.call(document.querySelectorAll('button'));return bs.filter(function(b){return re.test((b.innerText||'').trim())}).length>=2})()";
 const VOTE_RE = {
   a: /^A\s*更好$|^A is better$/i,
@@ -921,29 +1102,43 @@ async function readBattlePanes(c) {
   try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
-const NOT_READY_RE = /^(Generating|生成中|Thinking|思考中)[.…]*$/i;
+// arena 自己生成失败时页面上会出现这句，别一直等到超时
+const PAGE_ERR_JS = "(()=>{try{var t=document.body.innerText||'';return /Something went wrong while generating|生成响应时出错|Please try again\\./i.test(t)}catch(e){return false}})()";
+const NOT_READY_RE = /^(Generating|生成中|Thinking|思考中|Creating|生成图片|正在生成|绘制中)/i;
 const paneReady = (t) => !!t && !NOT_READY_RE.test(String(t).trim());
+// 图片模式的两栏没有正文，只有图
+const paneHasPic = (p) => !!(p && p.images && p.images.length);
 
-async function askBattle(s, prompt) {
+async function askBattle(s, prompt, mode) {
   const c = s.cdp;
   if (await c.ev(VERIFY_JS)) throw needVerify(c);
   if (!(await c.ev(READY_JS))) await waitReady(c);
-  for (let i = 0; i < 24; i++) { if (await c.ev(MODELS_READY_JS).catch(() => false)) break; await sleep(500); }
+  await setMode(c, mode === 'side' ? 'side' : 'battle');
   await sleep(600);
   if (await isGenerating(c)) { await stopGeneration(c); await sleep(800); }
+  await c.send('Page.bringToFront').catch(() => {});
   await typePrompt(c, prompt);
   const t0 = Date.now();
-  let lastSig = '', changedAt = Date.now(), sawSendStuck = 0;
+  let lastSig = '', changedAt = Date.now(), sawSendStuck = 0, genSince = 0, pageErr = 0;
   while (Date.now() - t0 < ASK_MAX_MS) {
     await sleep(POLL_MS);
     if (c.closed) throw new Error('tab closed');
     if (await c.ev(VERIFY_JS)) throw needVerify(c);
     const p = await readBattlePanes(c);
-    if (p && paneReady(p.a.text) && paneReady(p.b.text)) {
+    if (p && (paneHasPic(p.a) || paneReady(p.a.text)) && (paneHasPic(p.b) || paneReady(p.b.text))) {
       if (await c.ev(VOTE_READY_JS)) return p;
       const sig = p.a.text.length + ':' + p.b.text.length;
       if (sig !== lastSig) { lastSig = sig; changedAt = Date.now(); }
       else if (Date.now() - changedAt > 8000) return p;  // 投票条没渲染也别卡死
+    } else if (await c.ev(PAGE_ERR_JS).catch(() => false)) {
+      // 上游自己挂了（常见于图片生成），早点把错误抛给客户端
+      if (++pageErr >= 3) throw new Error('arena 生成失败：页面报 Something went wrong');
+      await sleep(1000);
+      continue;
+    } else if (p) {
+      // 图片模式下两栏长时间只有「Generating image...」，别一直等到 2 小时上限
+      if (!genSince) genSince = Date.now();
+      if (Date.now() - genSince > 360000) throw new Error('battle timeout: 图片一直没生成出来');
     } else if (!p) {
       const left = await c.ev(VAL_JS).catch(() => 0);
       if (left > 1) {
@@ -968,6 +1163,20 @@ async function voteBattle(c, choice) {
     await sleep(500);
   }
   return await readBattlePanes(c);
+}
+
+/* ---------- 沙盒文件 ---------- */
+// 沙盒在云端，本地只能让 agent 代跑命令；输出里常带代码块，剥一层
+const shellq = (v) => "'" + String(v).replace(/'/g, "'\\''") + "'";
+const SANDBOX_CMDS = {
+  ls: (p) => 'ls -la ' + shellq(p),
+  read: (p) => 'cat ' + shellq(p),
+  get: (p) => 'base64 -w0 ' + shellq(p)
+};
+
+function stripFence(t) {
+  const m = String(t || '').trim().match(/^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$/);
+  return m ? m[1] : String(t || '').trim();
 }
 
 /* ---------- queue ---------- */
@@ -1054,12 +1263,61 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === '/health') {
     const ok = await cdpApi('GET', '/json/version').then(() => true).catch(() => false);
     if (!ok) ensureChrome().catch(() => {});
+    if (ok && !authUserCache) {
+      const idle = [...sessions.values()].find(s => !s.busy);
+      if (idle) {
+        const me = await Promise.race([
+          idle.cdp.evJson('(async function(){try{var r=await fetch("/api/me",{credentials:"include"});if(!r.ok)return "null";var d=await r.json();return JSON.stringify(d&&d.user?{email:d.user.email||"",id:d.user.id||""}:null)}catch(e){return "null"}})()').catch(() => null),
+          sleep(1500).then(() => null)
+        ]);
+        if (me && me.email) authUserCache = me;
+      }
+    }
     return send(200, {
       ok, chrome: ok, version: VERSION, uptime: Math.round(process.uptime()),
       sessions: [...sessions.keys()], queue: queueDepth(), working,
+      user: authUserCache,
       limits: { maxQueue: MAX_QUEUE, maxSessions: MAX_SESSIONS, minGapMs: MIN_GAP_MS, maxPromptChars: MAX_PROMPT_CHARS },
       auth: !!AUTH_TOKEN,
     });
+  }
+  if (u.pathname === '/auth/status' || u.pathname === '/auth/ensure') {
+    try {
+      await ensureChrome();
+      const s = await getSession(u.searchParams.get('session') || DEFAULT_SESSION, { mode: 'agent' });
+      const info = await s.cdp.evJson(`(async function(){
+        var hasLoginBtn = [].slice.call(document.querySelectorAll("button,a")).some(function(el){
+          var t = (el.innerText || "").trim();
+          return /^(Log In|Log in|Sign up for free)$/i.test(t) && el.getBoundingClientRect().width > 0;
+        });
+        var apiOk = false, user = null;
+        try {
+          var r = await fetch("/api/me", {credentials:"include"});
+          if (r && r.ok) {
+            apiOk = true;
+            var d = await r.json().catch(function(){return null});
+            if (d && d.user) user = { email: d.user.email || "", id: d.user.id || "" };
+          }
+        } catch (e) {}
+        return JSON.stringify({ loggedIn: apiOk && !hasLoginBtn, apiOk: apiOk, hasLoginBtn: hasLoginBtn, user: user, url: location.href });
+      })()`);
+      const loggedIn = !!(info && info.loggedIn);
+      if (loggedIn && info && info.user && info.user.email) authUserCache = info.user;
+      let action = 'none';
+      if (u.pathname === '/auth/ensure') {
+        if (!loggedIn) {
+          restoreChrome();
+          await s.cdp.send('Page.bringToFront').catch(() => {});
+          action = 'brought_to_front';
+        } else {
+          minimizeChrome();
+          action = 'minimized';
+        }
+      }
+      return send(200, Object.assign({ ok: true, action }, info || { loggedIn: false }));
+    } catch (e) {
+      return send(500, { ok: false, loggedIn: false, error: e.message });
+    }
   }
   if (u.pathname === '/debug') {
     const name = u.searchParams.get('session') || DEFAULT_SESSION;
@@ -1071,24 +1329,205 @@ const server = http.createServer(async (req, res) => {
       return send(200, { state: st, url: href });
     } catch (e) { return send(500, { error: e.message }); }
   }
+  const fetchLiveModels = async (arenaKind, force) => {
+    const kind = arenaKind || 'text';
+    if (!force && Date.now() - modelCatalogCache.at < 300000 && modelCatalogCache.byArena[kind] && modelCatalogCache.byArena[kind].length) {
+      return modelCatalogCache.byArena[kind];
+    }
+    try {
+      if (!(await ensureChrome())) return modelCatalogCache.byArena[kind] || [];
+      const list = await cdpApi('GET', '/json/list');
+      let tab = Array.isArray(list) ? list.find(t => t.type === 'page' && /^https:\/\/arena\.ai/i.test(t.url || '')) : null;
+      let c = null;
+      let owned = false;
+      if (tab) {
+        c = await connectTab(tab.id);
+        owned = true;
+      } else {
+        const s0 = sessions.values().next().value;
+        if (s0 && s0.cdp && !s0.cdp.closed) c = s0.cdp;
+      }
+      if (!c) return modelCatalogCache.byArena[kind] || [];
+      try {
+        const out = await c.evJson(`(async function(){
+          try {
+            var r = await fetch("/nextjs-api/model-catalog", {credentials:"include"});
+            if (!r || !r.ok) return "{}";
+            var arr = await r.json();
+            if (!Array.isArray(arr)) return "{}";
+            var res = {};
+            for (var i = 0; i < arr.length; i++) {
+              var a = arr[i];
+              if (!a || !a.arena || !Array.isArray(a.models)) continue;
+              res[a.arena] = a.models
+                .filter(function(m){ return m && m.userSelectable && (m.publicName || m.displayName); })
+                .sort(function(x, y){ return (x.rank || 9999) - (y.rank || 9999); })
+                .map(function(m){ return m.publicName || m.displayName; });
+            }
+            return JSON.stringify(res);
+          } catch (e) { return "{}"; }
+        })()`).catch(() => null);
+        if (out && typeof out === 'object' && Object.keys(out).length) {
+          modelCatalogCache = { at: Date.now(), byArena: out };
+        }
+      } finally {
+        if (owned && c) try { c.close(); } catch (e) {}
+      }
+    } catch (e) {}
+    return modelCatalogCache.byArena[kind] || [];
+  };
   if (u.pathname === '/models') {
-    return send(200, { models: ['auto', 'max'] });
+    const kind = u.searchParams.get('arena') || 'text';
+    const force = u.searchParams.get('refresh') === '1';
+    const live = await fetchLiveModels(kind, force);
+    const merged = ['auto', 'max'];
+    const seen = new Set(merged.map(x => x.toLowerCase()));
+    for (const m of live) {
+      const k = String(m).toLowerCase();
+      if (!seen.has(k)) { seen.add(k); merged.push(m); }
+    }
+    return send(200, { models: merged, arena: kind, count: merged.length });
   }
+  const fetchLiveRepos = async (cdp) => {
+    const out = await cdp.evJson(`(async function(){
+      try {
+        var r = await fetch("/api/coding/github/repos?limit=100", {credentials:"include"});
+        if (!r || !r.ok) return "[]";
+        var d = await r.json();
+        var arr = Array.isArray(d && d.repos) ? d.repos : [];
+        return JSON.stringify(arr.map(function(x){ return x && x.fullName; }).filter(Boolean));
+      } catch (e) { return "[]"; }
+    })()`).catch(() => []);
+    return Array.isArray(out) ? out : [];
+  };
+
   if (u.pathname === '/repos' || u.pathname === '/repo') {
     const rn = u.searchParams.get('session') || 'main';
     const want = u.searchParams.get('name') || '';
-    // cached=0 / false 不能当缓存：'0' 在 JS 里是真值，会把切换请求吞掉
     const cachedFlag = u.searchParams.get('cached');
-    if (cachedFlag && cachedFlag !== '0' && cachedFlag !== 'false')
+    if (cachedFlag && cachedFlag !== '0' && cachedFlag !== 'false') {
+      const idle = [...sessions.values()].find(s => !s.busy);
+      if (idle) {
+        const live = await fetchLiveRepos(idle.cdp).catch(() => []);
+        if (live.length) {
+          repoCache = { repo: repoCache.repo || '', repos: live };
+          try { fs.writeFileSync(path.join(STATE_DIR, 'repos.json'), JSON.stringify(repoCache)); } catch (e) {}
+          return send(200, { repo: repoCache.repo, repos: live, cached: false });
+        }
+      }
       return send(200, { repo: repoCache.repo, repos: repoCache.repos, cached: true });
+    }
     const doRepo = async () => {
-      // 仓库芯片只长在「还没开始对话」的 /agent 页面上。一旦进了具体会话，
-      // 输入框下面只剩一条只读的仓库栏（仓库 + 分支 + Create PR），点不开选择器。
-      // 所以：读列表用专门的空白页，切换则必须把会话页导航回 /agent。
-      const key = want ? rn : rn + '#repos';
-      const s = await getSession(key, { mode: 'agent', url: 'https://arena.ai/agent' });
-      // 仓库芯片只长在空白 /agent 页上。已有标签可能已经进了具体会话，
-      // 读列表和切换都得先把它拉回 /agent，否则找不到芯片。
+      const s = await getSession(rn, { mode: 'agent', url: 'https://arena.ai/agent' });
+      const here = await s.cdp.ev('location.href').catch(() => '');
+      if (want && !/^https:\/\/arena\.ai\/agent\/?(\?|#|$)/.test(here)) {
+        await s.cdp.send('Page.navigate', { url: 'https://arena.ai/agent' }).catch(() => {});
+        await waitReady(s.cdp);
+      } else if (!want) {
+        await waitReady(s.cdp);
+      }
+      const liveRepos = await fetchLiveRepos(s.cdp);
+      let chip = await s.cdp.ev(CHIP_TEXT_JS).catch(() => '');
+      if (!want) {
+        return { repo: chip || '', repos: liveRepos.length ? liveRepos : (repoCache.repos || []) };
+      }
+      if (chip === want) return { ok: true, repo: chip, repos: liveRepos.length ? liveRepos : (repoCache.repos || []), changed: false };
+      const escKey = async () => {
+        await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {});
+        await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {});
+        await sleep(400);
+      };
+      let chipPos = await s.cdp.ev(CHIP_POS_JS).catch(() => '');
+      for (let i = 0; i < 6 && (!chipPos || chipPos.charAt(0) !== '{'); i++) {
+        await sleep(500);
+        chipPos = await s.cdp.ev(CHIP_POS_JS).catch(() => '');
+      }
+      if (!chipPos || chipPos.charAt(0) !== '{') {
+        await s.cdp.ev("(function(){var b=[].slice.call(document.querySelectorAll('button[aria-label*=connections i]')).find(function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0});if(b)b.click()})()").catch(() => {});
+        await sleep(800);
+        await s.cdp.ev("(function(){var d=document.querySelector('[role=dialog]');if(!d)return;var sw=[].slice.call(d.querySelectorAll('[role=switch]')).find(function(s){var row=s.closest('div[class]')&&s.closest('div[class]').parentElement;return row&&/GitHub/i.test(row.textContent||'')});if(sw&&sw.getAttribute('aria-checked')!=='true')sw.click()})()").catch(() => {});
+        await sleep(900);
+        await escKey();
+        for (let i = 0; i < 8 && (!chipPos || chipPos.charAt(0) !== '{'); i++) {
+          await sleep(500);
+          chipPos = await s.cdp.ev(CHIP_POS_JS).catch(() => '');
+        }
+      }
+      if (!chipPos || chipPos.charAt(0) !== '{') throw new Error('找不到仓库选择按钮（GitHub 未连接？）');
+      await s.cdp.ev("(function(){var bs=[].slice.call(document.querySelectorAll('button'));var b=bs.find(function(x){var t=(x.textContent||'').trim();var r=x.getBoundingClientRect();return r.width>0&&r.height>0&&((t.length>2&&t.length<60&&/^[\\w.-]+\\/[\\w.-]+$/.test(t))||/Select a rep/i.test(t))});if(b)b.click()})()").catch(() => {});
+      await sleep(1000);
+      const readList = async () => {
+        const raw = await s.cdp.ev(LIST_REPOS_JS).catch(() => '');
+        try { return raw ? JSON.parse(raw) : { items: [] }; } catch (e) { return { items: [] }; }
+      };
+      let list = await readList();
+      if (!list.items || !list.items.length) {
+        await realClick(s.cdp, JSON.parse(chipPos)).catch(() => {});
+        for (let i = 0; i < 10; i++) {
+          await sleep(500);
+          list = await readList();
+          if (list.items && list.items.length) break;
+        }
+      }
+      if (!list.items || !list.items.length) { await escKey(); throw new Error('弹层里没读到仓库列表（GitHub 未连接？）'); }
+      let pos = '';
+      for (let i = 0; i < 8; i++) {
+        pos = await s.cdp.ev(repoPosJs(want)).catch(() => '');
+        if (pos && pos.charAt(0) === '{') break;
+        pos = '';
+        await sleep(350);
+      }
+      if (!pos) { await escKey(); throw new Error('列表里没有 ' + want + ' | available: ' + list.items.join(', ')); }
+      await realClick(s.cdp, JSON.parse(pos));
+      await sleep(900);
+      if (await s.cdp.ev(DIALOG_OPEN_JS) === '1') {
+        await s.cdp.ev("(function(){var nm=" + JSON.stringify(want) + ";var cs=[].slice.call(document.querySelectorAll('[role=listbox],[role=dialog],[role=menu]'));for(var i=0;i<cs.length;i++){var d=cs[i];if(d.getBoundingClientRect().width<=0)continue;var es=[].slice.call(d.querySelectorAll('*')).filter(function(x){return x.children.length<=2&&(x.textContent||'').trim()===nm});if(es.length){es[es.length-1].click();return}}})()").catch(() => {});
+        await sleep(800);
+      }
+      if (await s.cdp.ev(DIALOG_OPEN_JS) === '1') await escKey();
+      let after = '';
+      for (let i = 0; i < 10; i++) { after = await s.cdp.ev(CHIP_TEXT_JS).catch(() => ''); if (after === want) break; await sleep(500); }
+      const finalRepos = liveRepos.length ? liveRepos : list.items;
+      return { ok: true, repo: after || want, repos: finalRepos, changed: true };
+    };
+    return enqueue(doRepo).then(r => {
+      minimizeChrome();
+      if (r.changed) { histories.delete(rn); contextLost.delete(rn); }
+      repoCache = { repo: r.repo || '', repos: r.repos || [] };
+      try { fs.writeFileSync(path.join(STATE_DIR, 'repos.json'), JSON.stringify(repoCache)); } catch (e) {}
+      send(200, r);
+    }).catch(e => { minimizeChrome(); send(e && e.busy ? 429 : 500, { error: e.message }); });
+  }
+
+  if (u.pathname === '/connectors' || u.pathname === '/connector') {
+    const isPost = req.method === 'POST';
+    let body = {};
+    if (isPost) {
+      try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { return send(400, { error: 'bad json' }); }
+    }
+    const rn = String((isPost ? body.session : u.searchParams.get('session')) || DEFAULT_SESSION);
+    const wantRaw = String((isPost ? body.name : u.searchParams.get('name')) || '').trim();
+    const enableParam = isPost ? body.enable : u.searchParams.get('enable');
+    const normConn = (raw) => {
+      const k = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const map = {
+        github: 'GitHub', gh: 'GitHub',
+        drive: 'Google Drive', googledrive: 'Google Drive', gdrive: 'Google Drive',
+        docs: 'Google Docs', googledocs: 'Google Docs', gdocs: 'Google Docs', doc: 'Google Docs',
+        sheets: 'Google Sheets', googlesheets: 'Google Sheets', gsheets: 'Google Sheets', sheet: 'Google Sheets',
+        slides: 'Google Slides', googleslides: 'Google Slides', gslides: 'Google Slides', slide: 'Google Slides',
+        notion: 'Notion',
+        linear: 'Linear',
+        gmail: 'Gmail',
+        supabase: 'Supabase',
+        vercel: 'Vercel',
+        dropbox: 'Dropbox',
+        cal: 'Google Calendar', calendar: 'Google Calendar', googlecalendar: 'Google Calendar', gcal: 'Google Calendar',
+      };
+      return map[k] || raw;
+    };
+    const doConn = async () => {
+      const s = await getSession(rn, { mode: 'agent', url: 'https://arena.ai/agent' });
       const here = await s.cdp.ev('location.href').catch(() => '');
       if (!/^https:\/\/arena\.ai\/agent\/?(\?|#|$)/.test(here)) {
         await s.cdp.send('Page.navigate', { url: 'https://arena.ai/agent' }).catch(() => {});
@@ -1097,52 +1536,87 @@ const server = http.createServer(async (req, res) => {
       const escKey = async () => {
         await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {});
         await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {});
-        await sleep(400);
+        await sleep(300);
       };
-      const readList = async () => {
-        const raw = await s.cdp.ev(LIST_REPOS_JS).catch(() => '');
-        try { return raw ? JSON.parse(raw) : { items: [] }; } catch (e) { return { items: [] }; }
-      };
-      let chip = await s.cdp.ev(CHIP_TEXT_JS).catch(() => '');
-      for (let i = 0; i < 10 && !chip; i++) { await sleep(700); chip = await s.cdp.ev(CHIP_TEXT_JS).catch(() => ''); }
-      if (!chip) throw new Error('页面上没有仓库芯片（会话页面？）');
-      if (want && chip === want) return { ok: true, repo: chip, repos: repoCache.repos || [], changed: false };
-      const chipPos = await s.cdp.ev(CHIP_POS_JS).catch(() => '');
-      if (!chipPos || chipPos.charAt(0) !== '{') throw new Error('找不到仓库芯片的位置');
-      await realClick(s.cdp, JSON.parse(chipPos));
-      await sleep(1500);
-      let list = { items: [] };
-      for (let i = 0; i < 10; i++) {
-        list = await readList();
-        if (list.items && list.items.length) break;
-        await sleep(600);
+      const opened = await s.cdp.ev("(function(){var b=[].slice.call(document.querySelectorAll('button[aria-label*=connections i]')).find(function(x){var r=x.getBoundingClientRect();return r.width>0&&r.height>0});if(!b)return '';b.click();return 'ok'})()").catch(() => '');
+      if (!opened) throw new Error('找不到 Add files and connections 按钮');
+      await sleep(800);
+      const wantName = wantRaw ? normConn(wantRaw) : '';
+      const enableVal = (enableParam === undefined || enableParam === null || enableParam === '') ? null
+        : (/^(1|true|on|yes)$/i.test(String(enableParam)) ? true : (/^(0|false|off|no)$/i.test(String(enableParam)) ? false : null));
+      const res = await s.cdp.evJson(`(function(){
+        var d=[].slice.call(document.querySelectorAll('[role=dialog]')).find(function(el){
+          return el.getBoundingClientRect().width>0 && /Connections/i.test(el.textContent||'');
+        }) || document.querySelector('[role=dialog]');
+        if(!d) return JSON.stringify({error:'Connections 弹层未打开'});
+        var list=[];
+        var seen={};
+        var pickName=function(el){
+          var raw=(el.innerText||el.textContent||'').trim();
+          var lines=raw.split(new RegExp('\\r?\\n')).map(function(x){return x.trim()}).filter(function(x){return x && !/^(Connect|Disconnect)$/i.test(x)});
+          var n=lines[0]||'';
+          if(n.length>4 && n.length%2===0){
+            var h=n.slice(0,n.length/2);
+            if(h===n.slice(n.length/2)) n=h;
+          }
+          return n.trim();
+        };
+        [].slice.call(d.querySelectorAll('[role=switch]')).forEach(function(sw){
+          var row=sw.closest('div[class]')&&sw.closest('div[class]').parentElement;
+          var txt=row?pickName(row):'';
+          if(txt && !seen[txt]){
+            seen[txt]=true;
+            list.push({name:txt, connected:true, enabled:sw.getAttribute('aria-checked')==='true'});
+          }
+        });
+        [].slice.call(d.querySelectorAll('button')).forEach(function(b){
+          var t=(b.innerText||b.textContent||'').trim();
+          var m=/Connect$/i.test(t)&&!/Disconnect/i.test(t);
+          if(m){
+            var nm=pickName(b);
+            if(nm && !seen[nm]){
+              seen[nm]=true;
+              list.push({name:nm, connected:false, enabled:false});
+            }
+          }
+        });
+        var want=${JSON.stringify(wantName)};
+        if(!want) return JSON.stringify({ok:true, connectors:list});
+        var en=${JSON.stringify(enableVal)};
+        var target=list.find(function(x){return x.name.toLowerCase()===want.toLowerCase()})
+          || list.find(function(x){return x.name.toLowerCase().indexOf(want.toLowerCase())>=0});
+        if(!target) return JSON.stringify({error:'未找到连接器: '+want, connectors:list});
+        if(target.connected){
+          var sw=[].slice.call(d.querySelectorAll('[role=switch]')).find(function(s){
+            var row=s.closest('div[class]')&&s.closest('div[class]').parentElement;
+            var txt=row?pickName(row):'';
+            return txt===target.name;
+          });
+          var cur=sw.getAttribute('aria-checked')==='true';
+          var next=(en===null)?(!cur):en;
+          var changed=(cur!==next);
+          if(changed) sw.click();
+          return JSON.stringify({ok:true, name:target.name, connected:true, enabled:next, changed:changed, connectors:list});
+        } else {
+          var btn=[].slice.call(d.querySelectorAll('button')).find(function(b){
+            return pickName(b).toLowerCase() === target.name.toLowerCase() && /Connect$/i.test((b.innerText||b.textContent||'').trim());
+          });
+          if(btn) btn.click();
+          return JSON.stringify({ok:true, name:target.name, connected:false, enabled:false, action:'connect_clicked', connectors:list});
+        }
+      })()`);
+      await sleep(400);
+      if (res && res.action === 'connect_clicked') {
+        restoreChrome();
+        await s.cdp.send('Page.bringToFront').catch(() => {});
+      } else {
+        await escKey();
+        minimizeChrome();
       }
-      if (!list.items || !list.items.length) { await escKey(); throw new Error('弹层里没读到仓库列表（GitHub 未连接？）'); }
-      if (!want) { await escKey(); return { repo: chip, repos: list.items }; }
-      let pos = '';
-      for (let i = 0; i < 10; i++) {
-        pos = await s.cdp.ev(repoPosJs(want)).catch(() => '');
-        if (pos && pos.charAt(0) === '{') break;
-        pos = '';
-        await sleep(400);
-      }
-      if (!pos) { await escKey(); throw new Error('列表里没有 ' + want + ' | available: ' + list.items.join(', ')); }
-      await realClick(s.cdp, JSON.parse(pos));
-      await sleep(1200);
-      if (await s.cdp.ev(DIALOG_OPEN_JS) === '1') await escKey();
-      let after = '';
-      for (let i = 0; i < 10; i++) { after = await s.cdp.ev(CHIP_TEXT_JS).catch(() => ''); if (after === want) break; await sleep(600); }
-      return { ok: true, repo: after || want, repos: list.items, changed: true };
+      if (res && res.error) throw new Error(res.error);
+      return res;
     };
-    // 走同一个队列：否则切仓库会在一轮回答跑到一半时去点页面，把正在生成的状态搅乱
-    return enqueue(doRepo).then(r => {
-      minimizeChrome();
-      // 真的切了仓库才等于开新对话：页面上没有旧上下文了，服务端历史也要跟着清
-      if (r.changed) { histories.delete(rn); contextLost.delete(rn); }
-      repoCache = { repo: r.repo || '', repos: r.repos || [] };
-      try { fs.writeFileSync(path.join(STATE_DIR, 'repos.json'), JSON.stringify(repoCache)); } catch (e) {}
-      send(200, r);
-    }).catch(e => { minimizeChrome(); send(e && e.busy ? 429 : 500, { error: e.message }); });
+    return enqueue(doConn).then(r => send(200, r)).catch(e => { minimizeChrome(); send(e && e.busy ? 429 : 500, { error: e.message }); });
   }
   if (u.pathname === '/upload' && req.method === 'POST') {
     let body;
@@ -1218,7 +1692,7 @@ const server = http.createServer(async (req, res) => {
         const gap = Date.now() - (s.lastAsk || 0);
         if (gap < MIN_GAP_MS) await sleep(MIN_GAP_MS - gap);
         s.lastAsk = Date.now();
-        const p = await askBattle(s, prompt);
+        const p = await askBattle(s, prompt, mode);
         battleRounds.set(session, { panes: p, mode, at: Date.now() });
         return p;
       } finally {
@@ -1388,7 +1862,10 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
       log('PROMPT len=' + prompt.length);
     }
     const truncated = prompt.length > MAX_PROMPT_CHARS;
-    const opts = { model: body.model && body.model !== 'auto' ? body.model : '', mode: (body.metadata && body.metadata.mode) || 'agent', models: (function (m) { if (Array.isArray(m)) return m.map(String).filter(Boolean).slice(0, 2); if (typeof m === 'string' && m) return m.split(',').map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 2); return []; })(body.metadata && body.metadata.models), fresh };
+    const reqModel = body.model && body.model !== 'auto' ? String(body.model).trim() : '';
+    const explicitMode = body.metadata && body.metadata.mode ? String(body.metadata.mode).trim() : '';
+    const inferredMode = explicitMode || (reqModel === 'arena-direct' || (reqModel && !/^arena-/i.test(reqModel)) ? 'direct' : 'agent');
+    const opts = { model: reqModel, mode: inferredMode, models: (function (m) { if (Array.isArray(m)) return m.map(String).filter(Boolean).slice(0, 2); if (typeof m === 'string' && m) return m.split(',').map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 2); return []; })(body.metadata && body.metadata.models), fresh };
     const wantStream = !!body.stream;
     const id = 'chatcmpl-' + Date.now().toString(36);
     const created = Math.floor(Date.now() / 1000);
@@ -1414,16 +1891,22 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
           const gap = Date.now() - (s2.lastAsk || 0);
           if (gap < MIN_GAP_MS) await sleep(MIN_GAP_MS - gap);
           s2.lastAsk = Date.now();
-          const p = await askBattle(s2, prompt);
+          const p = await askBattle(s2, prompt, opts.mode);
           battleRounds.set(name, { panes: p, mode: opts.mode, at: Date.now() });
           const text = '**A · ' + (p.a.label || 'A') + '**\n\n' + (p.a.text || '') + '\n\n---\n\n**B · ' + (p.b.label || 'B') + '**\n\n' + (p.b.text || '') + '\n\n投票：/vote a | b | tie | both';
-          if (wantStream) chunk({ content: text });
-          return { text };
+          const ia = await grabImages(s2.cdp, p.a.images || []);
+          const ib = await grabImages(s2.cdp, p.b.images || []);
+          const images = [];
+          ia.forEach((im, i) => images.push({ name: 'A' + (i ? '-' + (i + 1) : ''), mime: im.mime, data: im.data }));
+          ib.forEach((im, i) => images.push({ name: 'B' + (i ? '-' + (i + 1) : ''), mime: im.mime, data: im.data }));
+          if (wantStream) { chunk({ content: text }); if (images.length) chunk({ arena_images: images }); }
+          return { text, images };
         } finally {
           s2.busy = false;
         }
       }
-      const s = await getSession(name, opts);
+      for (let attempt = 0; attempt < 2; attempt++) {
+      const s = await getSession(name, attempt ? Object.assign({}, opts, { fresh: true }) : opts);
       live = s;
       s.busy = true;   // 淘汰与退出都看这个字段，别把正在跑的会话连根拔掉
       try {
@@ -1454,8 +1937,16 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
           }
         } catch (e) {}
         return r;
+      } catch (err) {
+        if (attempt === 0 && !clientGone && /typing failed|send failed \(composer still holds text\)|Page\.navigate timeout|page not ready/i.test(String(err && err.message || ""))) {
+          log("ui glitch, retrying once:", err.message);
+          resetSession(name, "retry: " + err.message);
+          continue;
+        }
+        throw err;
       } finally {
         s.busy = false;
+      }
       }
     };
 
@@ -1467,6 +1958,7 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
         const r = await enqueue(run);
         if (truncated) chunk({ reasoning_content: '\n\u00b7 prompt 超长，已截断到 ' + MAX_PROMPT_CHARS + ' 字符\n' });
         if (r && r.routed) chunk({ reasoning_content: '\n\u00b7 routed -> ' + r.routed + '\n' });
+        if (r && r.images && r.images.length) chunk({ arena_images: r.images });
         out('data: ' + JSON.stringify({ id, object: 'chat.completion.chunk', created, model: body.model || 'arena-agent', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n');
         out('data: [DONE]\n\n');
       } catch (e) {
@@ -1493,7 +1985,7 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
         id, object: 'chat.completion', created, model: body.model || 'arena-agent',
         choices: [{ index: 0, message: { role: 'assistant', content: r.text }, finish_reason: 'stop' }],
         usage: { prompt_tokens: prompt.length, completion_tokens: (r.text || '').length, total_tokens: prompt.length + (r.text || '').length },
-        arena: { tools: r.tools, reasoning: r.reasoning, routed: r.routed, truncated }
+        arena: { tools: r.tools, reasoning: r.reasoning, routed: r.routed, truncated, images: r.images || [] }
       });
     } catch (e) {
       log('v1 error:', e.message);
@@ -1507,7 +1999,9 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
     }
   }
   if (u.pathname === '/v1/models') {
-    return send(200, { object: 'list', data: [{ id: 'arena-agent', object: 'model', created: 0, owned_by: 'arena' }, { id: 'arena-direct', object: 'model', created: 0, owned_by: 'arena' }] });
+    const live = await fetchLiveModels('text', false);
+    const ids = ['arena-agent', 'arena-direct', ...live.filter(m => m !== 'arena-agent' && m !== 'arena-direct')];
+    return send(200, { object: 'list', data: ids.map(id => ({ id, object: 'model', created: 0, owned_by: 'arena' })) });
   }
   if (u.pathname === '/ask' && req.method === 'POST') {
     let body;
@@ -1554,7 +2048,7 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
       const endSSE = startSSE(res);
       try {
         const r = await enqueue(run);
-        out('data: ' + JSON.stringify({ type: 'done', text: r.text, reasoning: r.reasoning, routed: r.routed, tools: r.tools, truncated }) + '\n\n');
+        out('data: ' + JSON.stringify({ type: 'done', text: r.text, reasoning: r.reasoning, routed: r.routed, tools: r.tools, truncated, images: r.images || [] }) + '\n\n');
       } catch (e) {
         await fail(e);
         if (!(e.aborted || clientGone)) out('data: ' + JSON.stringify({ type: 'error', error: e.message }) + '\n\n');
@@ -1566,12 +2060,47 @@ const ctext = (c) => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x
 
     try {
       const r = await enqueue(run);
-      return send(200, { ok: true, text: r.text, reasoning: r.reasoning, routed: r.routed, tools: r.tools, truncated });
+      return send(200, { ok: true, text: r.text, reasoning: r.reasoning, routed: r.routed, tools: r.tools, truncated, images: r.images || [] });
     } catch (e) {
       await fail(e);
       if (e.aborted || clientGone) return send(499, { ok: false, error: 'client closed request' });
       const code = /NEED_VERIFY/.test(e.message) ? 409 : (e.busy || /busy/.test(e.message)) ? 429 : 500;
       return send(code, { ok: false, error: e.message });
+    }
+  }
+  if (u.pathname === '/sandbox') {
+    const name = u.searchParams.get('session') || DEFAULT_SESSION;
+    const op = (u.searchParams.get('op') || 'ls').toLowerCase();
+    const target = u.searchParams.get('path') || '/home/user';
+    if (!SANDBOX_CMDS[op]) return send(400, { ok: false, error: 'op 只能是 ls / read / get' });
+    const prompt = '只运行下面这一条命令，把标准输出原样贴出来。不要解释、不要加代码块标记、不要省略内容：\n' + SANDBOX_CMDS[op](target);
+    let clientGone = false;
+    res.on('close', () => { if (!res.writableFinished) clientGone = true; });
+    const ctx = { aborted: () => clientGone };
+    try {
+      if (!(await ensureChrome())) throw chromeDownError();
+      const s = await getSession(name, { mode: 'agent' });
+      s.busy = true;
+      let r;
+      try {
+        const gap = Date.now() - (s.lastAsk || 0);
+        if (gap < MIN_GAP_MS) await sleep(MIN_GAP_MS - gap);
+        s.lastAsk = Date.now();
+        r = await askOnce(s, prompt, null, ctx);
+        s.lastAsk = Date.now();
+      } finally {
+        s.busy = false;
+      }
+      const out = stripFence(r.text);
+      if (op === 'get') {
+        const b64 = out.replace(/[^A-Za-z0-9+/=]/g, '');
+        if (!b64) return send(502, { ok: false, error: '沙盒没有返回 base64' });
+        return send(200, { ok: true, op, path: target, data: b64 });
+      }
+      return send(200, { ok: true, op, path: target, output: out });
+    } catch (e) {
+      log('sandbox error:', e.message);
+      return send(/NEED_VERIFY/.test(e.message) ? 409 : 500, { ok: false, error: e.message });
     }
   }
   send(404, { error: 'not found' });
